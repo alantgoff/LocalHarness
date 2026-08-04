@@ -130,8 +130,37 @@ export const settings = {
       return { ...DEFAULT_SETTINGS };
     }
   },
+  /**
+   * Only known keys, only sane values.
+   *
+   * This is reachable over HTTP, and merging whatever arrives means a caller
+   * can set `maxRunsPerPass` to a billion or write arbitrary keys into the
+   * user's config file. Clamp the numbers that cost money and time, and drop
+   * everything that isn't a real setting.
+   */
   save(patch: Partial<Settings>): Settings {
-    const next = { ...this.get(), ...patch };
+    const current = this.get();
+    const clamp = (v: unknown, lo: number, hi: number, fallback: number) =>
+      typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : fallback;
+
+    const next: Settings = {
+      autoTune: typeof patch.autoTune === "boolean" ? patch.autoTune : current.autoTune,
+      watchForNewModels:
+        typeof patch.watchForNewModels === "boolean" ? patch.watchForNewModels : current.watchForNewModels,
+      tuneAfterLessons: clamp(patch.tuneAfterLessons, 1, 100, current.tuneAfterLessons),
+      idleMinutes: clamp(patch.idleMinutes, 0, 24 * 60, current.idleMinutes),
+      maxRunsPerPass: clamp(patch.maxRunsPerPass, 1, 5000, current.maxRunsPerPass),
+      ...(patch.lastTuneAt ?? current.lastTuneAt ? { lastTuneAt: patch.lastTuneAt ?? current.lastTuneAt } : {}),
+      ...(patch.lastTuneCaseCount ?? current.lastTuneCaseCount
+        ? { lastTuneCaseCount: clamp(patch.lastTuneCaseCount, 0, 1e6, current.lastTuneCaseCount ?? 0) }
+        : {}),
+      ...(Array.isArray(patch.knownModels)
+        ? { knownModels: patch.knownModels.filter((m) => typeof m === "string").slice(0, 200) }
+        : current.knownModels
+          ? { knownModels: current.knownModels }
+          : {}),
+    };
+
     mkdirSync(homeDir(), { recursive: true });
     writeFileSync(join(homeDir(), SETTINGS_FILE), JSON.stringify(next, null, 2) + "\n", "utf8");
     return next;

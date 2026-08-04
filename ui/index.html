@@ -50,7 +50,9 @@
   <section class="view" data-view="assistant" hidden>
     <div class="lede">
       <h1>Your assistant</h1>
-      <p>It runs on your own computer. Nothing you tell it leaves the machine, and everything it learns stays yours.</p>
+      <!-- Filled in from the endpoint actually configured. The privacy promise
+           is only true for a local one, so it is never stated blind. -->
+      <p id="privacy-line">It runs on your own computer. Nothing you tell it leaves the machine, and everything it learns stays yours.</p>
     </div>
 
     <!-- The brain comes first: everything below is a consequence of it, and on

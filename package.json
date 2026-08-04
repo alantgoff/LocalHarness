@@ -15,7 +15,8 @@
     "smoke": "node scripts/smoke.mjs",
     "artifact": "node scripts/build-artifact.mjs",
     "start": "node dist/desktop.js",
-    "package": "node scripts/package.mjs"
+    "package": "node scripts/package.mjs",
+    "security": "node scripts/security.mjs"
   },
   "engines": {
     "node": ">=20"

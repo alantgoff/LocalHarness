@@ -322,6 +322,44 @@ function ready() {
   return !!state.health?.ok && (state.health.models?.length ?? 0) > 0;
 }
 
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0"]);
+
+/** Where the questions actually go. Not the same as where the app is running. */
+function endpointIsLocal(baseUrl) {
+  if (!baseUrl) return true;
+  if (baseUrl.startsWith("mock://")) return true;
+  try {
+    return LOCAL_HOSTS.has(new URL(baseUrl).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * "Nothing leaves the machine" is true of a local model and false of a hosted
+ * one, and this app supports both. Saying it unconditionally would be the
+ * product's central promise, stated blind.
+ */
+function renderPrivacyLine() {
+  const l = me();
+  const el = $("#privacy-line");
+  if (!el) return;
+
+  if (endpointIsLocal(l?.baseUrl)) {
+    el.textContent =
+      "It runs on your own computer. Nothing you tell it leaves the machine, and everything it learns stays yours.";
+    el.classList.remove("privacy-remote");
+    return;
+  }
+
+  let host = l.baseUrl;
+  try { host = new URL(l.baseUrl).host; } catch { /* show it raw if unparseable */ }
+  el.textContent =
+    `Heads up: this is pointed at ${host}, so what you ask is sent there — it isn't staying on this computer. ` +
+    `Everything it has learned is still stored here, and only here.`;
+  el.classList.add("privacy-remote");
+}
+
 async function checkHealth() {
   if (!state.live) {
     // The demo shows both states: two installed, two not.
@@ -480,6 +518,7 @@ async function change(patch) {
     }
   }
   renderAssistant();
+  renderPrivacyLine();
   renderTop();
 }
 
@@ -489,6 +528,7 @@ function setText(id, t) { $(`#${id}`).textContent = t; }
 
 function renderAll() {
   renderTop();
+  renderPrivacyLine();
   renderHealth();
   renderAssistant();
   renderLearned();

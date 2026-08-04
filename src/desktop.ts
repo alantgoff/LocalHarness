@@ -64,7 +64,10 @@ export async function launch(): Promise<void> {
   process.stdout.write(
     `\n  LocalHarness is running.\n` +
       `  ${url}\n\n` +
-      `  Everything stays on this computer. Close this window to stop.\n\n`,
+      // Only claim what is true of the app itself. Whether questions stay on
+      // this machine depends on the endpoint the user configured, and the app
+      // says so on the page where that choice is made.
+      `  Only this computer can reach it. Close this window to stop.\n\n`,
   );
 
   if (!process.env.LOCALHARNESS_NO_BROWSER) openBrowser(url);

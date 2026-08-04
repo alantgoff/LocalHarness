@@ -31,6 +31,48 @@ const MIME: Record<string, string> = {
   ".svg": "image/svg+xml",
 };
 
+/**
+ * Who is allowed to talk to this.
+ *
+ * Binding to loopback is not access control. Any website the user visits can
+ * make their browser issue requests to 127.0.0.1, and with DNS rebinding —
+ * a domain that resolves to the attacker and then re-resolves to loopback —
+ * the browser treats those responses as same-origin and hands them over.
+ *
+ * That is not theoretical here. This API returns everything the user has ever
+ * taught their assistant, and lets a caller repoint `baseUrl` at a server of
+ * their choosing, which would turn a product whose entire promise is "nothing
+ * leaves this machine" into a silent exfiltration pipe.
+ *
+ * The defence is to check the Host header. A rebinding attack cannot forge it:
+ * the browser sends the attacker's domain, because that is the name it was
+ * asked to fetch.
+ */
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0"]);
+
+function hostAllowed(req: IncomingMessage): boolean {
+  const host = req.headers.host;
+  if (!host) return false;
+  // Strip the port; IPv6 literals keep their brackets.
+  const name = host.startsWith("[") ? host.slice(0, host.indexOf("]") + 1) : (host.split(":")[0] ?? "");
+  return LOCAL_HOSTS.has(name.toLowerCase());
+}
+
+/**
+ * A same-site request from the app's own page sends no Origin, or sends ours.
+ * Anything else on a state-changing method is another site driving this API.
+ */
+function originAllowed(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try {
+    const { hostname } = new URL(origin);
+    return LOCAL_HOSTS.has(hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
@@ -374,6 +416,18 @@ export function startServer(port: number): Promise<number> {
 
   const server = createServer((req, res) => {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
+
+    if (!hostAllowed(req)) {
+      // Deliberately terse: a rebinding probe learns nothing from this.
+      res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+      res.end("LocalHarness only answers to localhost.\n");
+      return;
+    }
+    if (req.method !== "GET" && req.method !== "HEAD" && !originAllowed(req)) {
+      res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+      res.end("Cross-site requests are not accepted.\n");
+      return;
+    }
 
     // Polling and health probes are the app talking to itself; counting them
     // as activity would mean it never considered itself idle.

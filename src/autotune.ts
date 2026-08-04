@@ -103,7 +103,13 @@ async function scoreConfig(
     for (const call of run.toolCalls) used.add(call.name);
     speeds.push(run.stats.tokensPerSec);
 
-    const graded = run.error && !run.output ? { score: 0 } : await gradeCase(c, run.output, judge);
+    // Nobody is watching a tuning pass, so it decides on deterministic checks
+    // only. A candidate that talks the judge into a high score would otherwise
+    // get itself adopted as the user's setup, unattended.
+    const graded =
+      run.error && !run.output
+        ? { score: 0 }
+        : await gradeCase(c, run.output, judge, { preferDeterministic: true });
     total += graded.score;
     if (graded.score >= REMEMBERED) remembered++;
   }

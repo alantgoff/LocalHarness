@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { ToolSpec } from "./types.js";
 
 /**
@@ -26,12 +26,44 @@ function clip(s: string): string {
     : `${s.slice(0, MAX_RESULT_CHARS)}\n... [truncated, ${s.length - MAX_RESULT_CHARS} more characters]`;
 }
 
-/** Refuse anything that escapes the working directory. */
+/**
+ * Refuse anything that escapes the working directory.
+ *
+ * Comparing resolved paths is not enough, because `resolve` is pure string
+ * arithmetic and knows nothing about symlinks. A link inside the working
+ * directory pointing anywhere on the filesystem passes that check and then
+ * reads whatever it points at — and links are everywhere in ordinary project
+ * trees, so this needs no attacker to go wrong.
+ *
+ * So resolve links for real. A path that does not exist yet is checked
+ * through its nearest existing ancestor, which is the part that could be a
+ * link.
+ */
+function realOrNearest(p: string): string {
+  let candidate = resolve(p);
+  for (;;) {
+    try {
+      return realpathSync(candidate);
+    } catch {
+      const parent = dirname(candidate);
+      // Hit the filesystem root without finding anything real.
+      if (parent === candidate) return candidate;
+      candidate = parent;
+    }
+  }
+}
+
 function safeResolve(cwd: string, p: string): string {
   const target = resolve(cwd, p);
-  const rel = relative(cwd, target);
-  if (rel.startsWith("..")) {
+  if (relative(cwd, target).startsWith("..")) {
     throw new Error(`path escapes the working directory: ${p}`);
+  }
+
+  const root = realOrNearest(cwd);
+  const real = realOrNearest(target);
+  const rel = relative(root, real);
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error(`path leads outside the working directory: ${p}`);
   }
   return target;
 }
@@ -117,10 +149,13 @@ const searchText: Tool = {
         const full = join(dir, e);
         let st;
         try {
-          st = statSync(full);
+          // lstat, not stat: following a link here walks straight out of the
+          // working directory, and a link cycle never returns.
+          st = lstatSync(full);
         } catch {
           continue;
         }
+        if (st.isSymbolicLink()) continue;
         if (st.isDirectory()) {
           walk(full, depth + 1);
         } else if (st.size < 512_000) {
