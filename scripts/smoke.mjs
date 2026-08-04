@@ -126,6 +126,32 @@ try {
       .join("\n") + "\n",
   );
 
+  process.stdout.write("\n7. now let it tune itself, with nobody watching\n");
+  const { tune } = await import("../dist/autotune.js");
+  const result = await tune({
+    loadout,
+    candidateModels: ["good-model", "weak-model"],
+    onProgress: (d, t, note) => process.stdout.write(`     [${d}/${t}] ${note}\n`),
+  });
+
+  process.stdout.write("\n   it found:\n");
+  for (const f of result.findings) {
+    process.stdout.write(`     ${f.delta >= 0 ? "+" : ""}${(f.delta * 100).toFixed(0)} pts  ${f.label}\n`);
+    process.stdout.write(`             why: ${f.reason}\n`);
+    process.stdout.write(`          result: ${f.outcome}\n`);
+  }
+
+  check("it tried several changes on its own", result.tried >= 4, `${result.tried} candidates`);
+  check("it found the better brain unprompted",
+    result.findings.some((f) => f.label.includes("good-model") && f.delta > 0.5),
+    result.findings.map((f) => f.label).join(" | ") || "found nothing");
+  check("it noticed an ability that was pure cost",
+    result.findings.some((f) => f.label.startsWith("Drop") && f.reason.includes("never been used")),
+    "unused abilities are reported even when the score does not move");
+  check("it never changed anything itself",
+    loadout.model === "baseline-model" && loadout.tools.length === 2,
+    "the stored setup is untouched; a person applies findings");
+
   process.stdout.write(`\n${failures === 0 ? "all checks passed" : `${failures} check(s) failed`}\n`);
   process.exitCode = failures === 0 ? 0 : 1;
 } finally {

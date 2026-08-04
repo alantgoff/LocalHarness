@@ -274,6 +274,20 @@ body.show-nerd .nerd-only { display: revert; }
 .sw-b { background: color-mix(in srgb, var(--moss) 45%, var(--ochre)); }
 .sw-c { background: var(--ochre); }
 
+/* ── nothing to talk to ──────────────────────────────────────────────────── */
+
+/* The first real wall for a newcomer, so it gets a whole card and a plain
+   instruction rather than a failed task ten screens later. */
+.missing { border-color: color-mix(in srgb, var(--ochre) 55%, var(--edge)); background: color-mix(in srgb, var(--ochre) 6%, var(--card)); }
+.missing-title { margin: 0; font-family: var(--serif); font-size: 19px; font-weight: 600; }
+.missing-body { margin: 0; font-size: 14.5px; color: var(--ink-2); max-width: 58ch; }
+.missing-body code {
+  font-family: var(--mono); font-size: 13px;
+  padding: 1px 6px; border-radius: 4px;
+  background: var(--card-2); border: 1px solid var(--edge);
+}
+.missing.is-ok { border-color: color-mix(in srgb, var(--moss) 45%, var(--edge)); background: var(--moss-soft); }
+
 /* ── brains ──────────────────────────────────────────────────────────────── */
 
 .brains { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; }
@@ -438,6 +452,57 @@ body.show-nerd .nerd-only { display: revert; }
 .tag-fixed { background: color-mix(in srgb, var(--ochre) 22%, transparent); color: var(--ochre); }
 .tag-kept { background: var(--moss-soft); color: var(--moss); }
 .tag-wrong { background: color-mix(in srgb, var(--clay) 18%, transparent); color: var(--clay); }
+
+/* ── tuning ──────────────────────────────────────────────────────────────── */
+
+.pip-alert { background: var(--ochre); color: var(--card); }
+.tab[aria-pressed="false"] .pip-alert { background: var(--ochre); color: var(--card); }
+
+.btn-sm { padding: 5px 11px; font-size: 13px; }
+
+.working { border-color: color-mix(in srgb, var(--moss) 45%, var(--edge)); }
+.working-head { display: flex; align-items: center; gap: 12px; }
+.working-head .btn { margin-left: auto; }
+.working-note { margin: 0; font-size: 14.5px; }
+
+.working-bar { height: 6px; background: var(--card-2); border: 1px solid var(--edge); border-radius: 999px; overflow: hidden; }
+.working-fill {
+  display: block; height: 100%; width: 0;
+  background: var(--moss);
+  transition: width 0.5s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+.found { display: grid; gap: 10px; }
+
+.finding {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 16px;
+  align-items: start;
+  padding: 16px 18px;
+  background: var(--card);
+  border: 1px solid var(--edge);
+  border-left: 3px solid var(--moss);
+  border-radius: var(--r);
+  box-shadow: var(--shadow);
+}
+.finding.is-free { border-left-color: var(--ochre); }
+
+.finding-label { font-size: 16px; font-weight: 600; }
+.finding-gain {
+  grid-column: 2; grid-row: 1;
+  font-size: 15px; font-weight: 600; color: var(--moss);
+  white-space: nowrap;
+}
+.finding.is-free .finding-gain { color: var(--ochre); font-size: 13.5px; }
+
+/* The reason is the load-bearing part: a number nobody can check is worse
+   than no number, so every finding says what it noticed and what happened. */
+.finding-why { grid-column: 1 / -1; font-size: 14px; color: var(--ink-2); }
+.finding-outcome { grid-column: 1 / -1; font-family: var(--serif); font-size: 15px; }
+.finding-acts { grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+
+.baseline-note { margin: 0; font-size: 13.5px; color: var(--ink-3); }
 
 /* ── the upgrade moment ──────────────────────────────────────────────────── */
 

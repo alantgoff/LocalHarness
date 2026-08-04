@@ -5,14 +5,17 @@
   "description": "Build harnesses for open-weight models, and grow a personal eval suite out of using them.",
   "type": "module",
   "bin": {
-    "lh": "./dist/cli.js"
+    "lh": "./dist/cli.js",
+    "localharness": "./dist/desktop.js"
   },
   "scripts": {
     "build": "tsc",
     "lh": "node dist/cli.js",
     "ui": "node dist/server.js",
     "smoke": "node scripts/smoke.mjs",
-    "artifact": "node scripts/build-artifact.mjs"
+    "artifact": "node scripts/build-artifact.mjs",
+    "start": "node dist/desktop.js",
+    "package": "node scripts/package.mjs"
   },
   "engines": {
     "node": ">=20"

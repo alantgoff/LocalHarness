@@ -2,8 +2,10 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tune } from "./autotune.js";
 import { promoteToCase } from "./capture.js";
-import { computeEncumbrance, createLoadout } from "./loadout.js";
+import { cancelJob, getJob, listJobs, runningJob, startJob } from "./jobs.js";
+import { computeEncumbrance, createLoadout, DEFAULT_BASE_URL } from "./loadout.js";
 import { runReplay } from "./replay.js";
 import { executeRun } from "./runner.js";
 import { cases, ensureHome, loadouts, replays, runs } from "./store.js";
@@ -71,6 +73,7 @@ function snapshot() {
     tools: toolCatalogue(),
     cases: cases.list(),
     replays: replays.list().map((r) => ({ ...r, results: r.results })),
+    jobs: listJobs(),
   };
 }
 
@@ -84,6 +87,47 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, path: string
 
   if (path === "/api/state" && method === "GET") {
     sendJson(res, 200, snapshot());
+    return true;
+  }
+
+  /**
+   * Is anything actually serving models on this machine?
+   *
+   * This is the question that decides whether a newcomer gets anywhere at all,
+   * and it deserves a real answer rather than a failed task ten screens later.
+   * The model list doubles as the brain picker: showing what someone has
+   * installed beats showing a catalogue of things they don't.
+   */
+  if (path === "/api/health" && method === "GET") {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const baseUrl = url.searchParams.get("baseUrl") ?? loadouts.list()[0]?.baseUrl ?? DEFAULT_BASE_URL;
+
+    if (baseUrl.startsWith("mock://")) {
+      sendJson(res, 200, { ok: true, baseUrl, models: ["mock-model"], mock: true });
+      return true;
+    }
+
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3000);
+      const probe = await fetch(`${baseUrl.replace(/\/+$/, "")}/models`, {
+        signal: controller.signal,
+        headers: process.env.LOCALHARNESS_API_KEY
+          ? { authorization: `Bearer ${process.env.LOCALHARNESS_API_KEY}` }
+          : {},
+      }).finally(() => clearTimeout(timer));
+
+      if (!probe.ok) {
+        sendJson(res, 200, { ok: false, baseUrl, models: [], error: `the server answered with ${probe.status}` });
+        return true;
+      }
+      const json = (await probe.json()) as { data?: { id?: string }[] };
+      const models = (json.data ?? []).map((m) => m.id).filter((id): id is string => !!id);
+      sendJson(res, 200, { ok: true, baseUrl, models });
+    } catch (e) {
+      const reason = (e as Error).name === "AbortError" ? "it didn't answer in time" : "nothing is listening there";
+      sendJson(res, 200, { ok: false, baseUrl, models: [], error: reason });
+    }
     return true;
   }
 
@@ -123,6 +167,11 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, path: string
       l.tools = body.tools as string[];
     }
     if (Array.isArray(body.memory)) l.memory = body.memory as string[];
+    // Findings from a tuning pass can carry sampling changes, so they have to
+    // be appliable through the same path a person edits by hand.
+    if (body.params && typeof body.params === "object") {
+      l.params = { ...l.params, ...(body.params as Loadout["params"]) };
+    }
     if (typeof body.systemPrompt === "string") l.systemPrompt = body.systemPrompt;
     if (typeof body.model === "string") l.model = body.model;
     if (typeof body.baseUrl === "string") l.baseUrl = body.baseUrl;
@@ -178,6 +227,55 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, path: string
     return true;
   }
 
+  // Tuning is minutes of model calls, so it starts a job and returns at once.
+  if (path === "/api/tune" && method === "POST") {
+    const existing = runningJob("tune");
+    if (existing) {
+      sendJson(res, 200, existing);
+      return true;
+    }
+
+    const body = await readBody(req);
+    const loadout = loadouts.get(str(body, "loadoutId") ?? "") ?? loadouts.list()[0];
+    if (!loadout) {
+      sendJson(res, 404, { error: "no assistant set up yet" });
+      return true;
+    }
+
+    const models = Array.isArray(body.candidateModels) ? (body.candidateModels as string[]) : [];
+    const job = startJob("tune", (handle) =>
+      tune({
+        loadout,
+        candidateModels: models,
+        ...(typeof body.maxCandidates === "number" ? { maxCandidates: body.maxCandidates } : {}),
+        onProgress: handle.report,
+        signal: handle.signal,
+      }),
+    );
+    sendJson(res, 200, job);
+    return true;
+  }
+
+  if (path === "/api/jobs" && method === "GET") {
+    sendJson(res, 200, listJobs());
+    return true;
+  }
+
+  const jobMatch = path.match(/^\/api\/jobs\/([^/]+)$/);
+  if (jobMatch && method === "GET") {
+    const job = getJob(jobMatch[1]!);
+    if (!job) {
+      sendJson(res, 404, { error: "no such job" });
+      return true;
+    }
+    sendJson(res, 200, job);
+    return true;
+  }
+  if (jobMatch && method === "DELETE") {
+    sendJson(res, 200, { cancelled: cancelJob(jobMatch[1]!) });
+    return true;
+  }
+
   if (path === "/api/replay" && method === "POST") {
     const body = await readBody(req);
     const model = str(body, "model");
@@ -216,7 +314,8 @@ function serveStatic(res: ServerResponse, path: string): void {
   res.end(body);
 }
 
-export function startServer(port: number): void {
+/** Resolves with the port actually bound, which matters when passed 0. */
+export function startServer(port: number): Promise<number> {
   ensureHome();
 
   const server = createServer((req, res) => {
@@ -239,13 +338,19 @@ export function startServer(port: number): void {
 
   // Bind to loopback only. This exposes the filesystem through read tools and
   // has no auth; it has no business being reachable from the network.
-  server.listen(port, "127.0.0.1", () => {
-    process.stdout.write(`localharness ui  ->  http://localhost:${port}\n`);
+  return new Promise((ok, fail) => {
+    server.once("error", fail);
+    server.listen(port, "127.0.0.1", () => {
+      const address = server.address();
+      ok(typeof address === "object" && address ? address.port : port);
+    });
   });
 }
 
 const invokedDirectly = process.argv[1] && resolve(process.argv[1]).endsWith("server.js");
 if (invokedDirectly) {
   const portFlag = process.argv.indexOf("--port");
-  startServer(portFlag >= 0 ? Number(process.argv[portFlag + 1]) : 4173);
+  startServer(portFlag >= 0 ? Number(process.argv[portFlag + 1]) : 4173).then((p) =>
+    process.stdout.write(`localharness ui  ->  http://localhost:${p}\n`),
+  );
 }

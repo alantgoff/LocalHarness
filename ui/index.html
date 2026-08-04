@@ -22,6 +22,7 @@
       <button class="tab" data-view="assistant" aria-pressed="true">Assistant</button>
       <button class="tab" data-view="work" aria-pressed="false">Ask it something</button>
       <button class="tab" data-view="learned" aria-pressed="false">What it's learned<span class="pip" id="pip-learned">0</span></button>
+      <button class="tab" data-view="tune" aria-pressed="false">Make it better<span class="pip pip-alert" id="pip-tune" hidden>0</span></button>
       <button class="tab" data-view="upgrade" aria-pressed="false">Try a new brain</button>
     </nav>
 
@@ -39,6 +40,15 @@
     <div class="lede">
       <h1>Your assistant</h1>
       <p>It runs on your own computer. Nothing you tell it leaves the machine, and everything it learns stays yours.</p>
+    </div>
+
+    <div class="card missing" id="health-card" hidden>
+      <h2 class="missing-title" id="health-title">Looking for a model on this computer…</h2>
+      <p class="missing-body" id="health-body"></p>
+      <div class="row">
+        <button class="btn" id="btn-health">Check again</button>
+        <span class="hint" id="health-hint"></span>
+      </div>
     </div>
 
     <div class="card room">
@@ -156,6 +166,35 @@
       <p>Everything you've corrected, in your own words. This is the part that's actually yours — it survives every brain you swap in.</p>
     </div>
     <div id="learned-list"></div>
+  </section>
+
+  <!-- TUNE ------------------------------------------------------------------>
+  <section class="view" data-view="tune" hidden>
+    <div class="lede">
+      <h1>Make it better</h1>
+      <p>It can try things on its own — different brains, different abilities, different settings — and check each one against everything you've taught it. It never changes anything without asking.</p>
+    </div>
+
+    <div class="card" id="tune-start">
+      <h2 class="card-title">Have a look for improvements</h2>
+      <p class="card-sub" id="tune-scope">It'll work through your lessons one setup at a time. This takes a while — you can close this and come back.</p>
+      <div class="row">
+        <button class="btn btn-go" id="btn-tune">Start looking</button>
+        <span class="hint" id="tune-hint"></span>
+      </div>
+    </div>
+
+    <div class="card working" id="tune-working" hidden>
+      <div class="working-head">
+        <h2 class="card-title">Working on it</h2>
+        <button class="btn btn-sm" id="btn-tune-stop">Stop</button>
+      </div>
+      <p class="working-note" id="tune-note">Starting…</p>
+      <div class="working-bar"><span class="working-fill" id="tune-fill"></span></div>
+      <p class="taught-foot">You can leave this page. It'll keep going.</p>
+    </div>
+
+    <div id="tune-results"></div>
   </section>
 
   <!-- UPGRADE --------------------------------------------------------------->

@@ -254,6 +254,11 @@ const state = {
   activeId: null,
   run: null,
   lastTry: null,
+  tuneJob: null,
+  tuneResult: null,
+  dismissed: new Set(),
+  poller: null,
+  health: null,
 };
 
 const $ = (s) => document.querySelector(s);
@@ -276,6 +281,74 @@ function allAbilities() {
 
 function brainFor(model) {
   return BRAINS.find((b) => b.id === model) ?? { id: model, name: model, note: "", needs: "" };
+}
+
+/**
+ * What's actually on this machine, first; the catalogue after.
+ *
+ * Showing someone four models they could theoretically run is a worse answer
+ * than showing them the two they already have. Anything installed that the
+ * catalogue doesn't recognise still gets listed — it's theirs, and the app
+ * having no opinion about it is not a reason to hide it.
+ */
+function brainOptions() {
+  const installed = state.health?.models ?? [];
+  const seen = new Set();
+  const out = [];
+
+  for (const id of installed) {
+    seen.add(id);
+    const known = BRAINS.find((b) => b.id === id);
+    out.push(known ? { ...known, installed: true } : { id, name: id, note: "Already on this computer.", needs: "", installed: true });
+  }
+  for (const b of BRAINS) {
+    if (!seen.has(b.id)) out.push({ ...b, installed: false });
+  }
+  // Never hide the one currently in use, even if the probe missed it.
+  const current = me()?.model;
+  if (current && !out.some((b) => b.id === current)) {
+    out.unshift({ ...brainFor(current), installed: true });
+  }
+  return out;
+}
+
+async function checkHealth() {
+  if (!state.live) {
+    // The demo shows both states: two installed, two not.
+    state.health = { ok: true, models: ["qwen2.5-coder:7b", "llama3.2:3b"], baseUrl: me()?.baseUrl };
+    return;
+  }
+  try {
+    state.health = await api(`/api/health?baseUrl=${encodeURIComponent(me()?.baseUrl ?? "")}`);
+  } catch (e) {
+    state.health = { ok: false, models: [], error: e.message };
+  }
+}
+
+function renderHealth() {
+  const h = state.health;
+  const card = $("#health-card");
+  if (!h) { card.hidden = true; return; }
+
+  // A working setup does not need a banner about being fine.
+  if (h.ok && h.models.length) { card.hidden = true; return; }
+
+  card.hidden = false;
+  card.classList.toggle("is-ok", !!h.ok);
+
+  if (h.ok && !h.models.length) {
+    setText("health-title", "Nothing downloaded yet");
+    $("#health-body").innerHTML =
+      "Something is running on this computer, but it hasn't got a model yet. " +
+      "Download one with <code>ollama pull llama3.2</code> and I'll pick it up.";
+    return;
+  }
+
+  setText("health-title", "I can't find a model on this computer");
+  $("#health-body").innerHTML =
+    `Nothing is answering at <code>${esc(h.baseUrl ?? "")}</code>${h.error ? ` — ${esc(h.error)}` : ""}. ` +
+    "The usual fix is to install <b>Ollama</b>, open it once, and run <code>ollama pull llama3.2</code>. " +
+    "You can also point this at a hosted model under &ldquo;Use a brain that isn't listed&rdquo;.";
 }
 
 function roomOf(l) {
@@ -333,6 +406,7 @@ async function boot() {
     Object.assign(state, demoState(), { live: false });
   }
   state.activeId = state.loadouts[0]?.id ?? null;
+  await checkHealth();
   renderAll();
 }
 
@@ -357,6 +431,7 @@ function setText(id, t) { $(`#${id}`).textContent = t; }
 
 function renderAll() {
   renderTop();
+  renderHealth();
   renderAssistant();
   renderLearned();
   renderTryList();
@@ -372,6 +447,14 @@ function renderTop() {
     `${brainFor(l?.model).name}${state.live ? "" : " · demo"} · ${n} thing${n === 1 ? "" : "s"} learned`,
   );
   setText("pip-learned", n);
+
+  // A waiting improvement is the one thing worth pulling someone back for.
+  const waiting = liveFindings().length;
+  const pip = $("#pip-tune");
+  pip.hidden = waiting === 0;
+  pip.textContent = waiting;
+
+  setText("tune-scope", tuneScopeNote());
 }
 
 function renderAssistant() {
@@ -405,7 +488,7 @@ function renderAssistant() {
   setText("room-nerd", `${r.total} of ${r.window} tokens · ${(r.ratio * 100).toFixed(1)}% · ${l.model} @ ${l.baseUrl}`);
 
   // brains
-  $("#brain-list").innerHTML = BRAINS.map((b) => brainHtml(b, b.id === l.model, "pick")).join("");
+  $("#brain-list").innerHTML = brainOptions().map((b) => brainHtml(b, b.id === l.model, "pick")).join("");
 
   if (document.activeElement !== $("#f-model")) $("#f-model").value = l.model;
   if (document.activeElement !== $("#f-baseurl")) $("#f-baseurl").value = l.baseUrl;
@@ -441,9 +524,14 @@ function renderAssistant() {
 }
 
 function brainHtml(b, current, action) {
+  const tag = current
+    ? '<span class="badge">using this</span>'
+    : b.installed === false
+      ? '<span class="badge badge-soft">not downloaded</span>'
+      : "";
   return `<li>
     <button class="brain ${current ? "is-on" : ""}" data-brain="${esc(b.id)}" data-action="${action}" ${current && action === "pick" ? "disabled" : ""}>
-      <span class="brain-name">${esc(b.name)}${current ? '<span class="badge">using this</span>' : ""}</span>
+      <span class="brain-name">${esc(b.name)}${tag}</span>
       <span class="brain-pick">${current ? "" : action === "pick" ? "Use this" : "Test it"}</span>
       <span class="brain-note">${esc(b.note)}</span>
       <span class="brain-needs">${esc(b.needs)}<span class="nerd-only mono"> · ${esc(b.id)}</span></span>
@@ -494,7 +582,7 @@ function renderLearned() {
 
 function renderTryList() {
   const l = me();
-  $("#try-list").innerHTML = BRAINS.filter((b) => b.id !== l?.model).map((b) => brainHtml(b, false, "try")).join("");
+  $("#try-list").innerHTML = brainOptions().filter((b) => b.id !== l?.model).map((b) => brainHtml(b, false, "try")).join("");
 }
 
 function show(view) {
@@ -609,7 +697,8 @@ const REMEMBERED = 0.8;
 
 /** Whole sentences, so the caller never has to glue fragments together. */
 function speedSentence(now, before) {
-  if (!before || !now) return "";
+  // Both sides need a real measurement; a sub-millisecond run reports zero.
+  if (!(before >= 1) || !(now >= 1)) return "";
   const k = now / before;
   if (k >= 1.8) return "It's about twice as fast as the one you're using.";
   if (k >= 1.25) return "It's noticeably faster than the one you're using.";
@@ -709,6 +798,189 @@ function renderTryResult() {
   </div>`;
 }
 
+// ── making it better, on its own ──────────────────────────────────────────────
+
+/**
+ * A worked tuning pass for the demo, shaped like a real one: a change that
+ * plainly wins, a change that costs nothing and frees room, and a small
+ * settings win — because those are the three kinds of answer the engine
+ * actually returns.
+ */
+function demoTuneResult() {
+  const total = state.cases.length;
+  return {
+    baseline: { mean: 0.74, remembered: Math.max(0, total - 1), total, tokensPerSec: 31.4 },
+    tried: 7,
+    cases: total,
+    findings: [
+      {
+        kind: "brain",
+        label: "Switch to New and fast",
+        reason: "A different brain, checked against everything you've taught this one.",
+        outcome: `remembers 1 more of the things you taught it, and is 2.4× faster.`,
+        delta: 0.18, remembered: total, total, speedRatio: 2.4,
+        patch: { model: "deepseek-v4-flash" },
+      },
+      {
+        kind: "ability",
+        label: 'Drop "Search my files"',
+        reason: "It has never been used on any task you've given it, and it costs 1.9% of its room every single time.",
+        outcome: "remembers all the same things, with more room left over to think.",
+        delta: 0, remembered: Math.max(0, total - 1), total, speedRatio: 1.05,
+        patch: { tools: ["read_file"] },
+      },
+      {
+        kind: "variation",
+        label: "Make it more predictable",
+        reason: "Same answer every time for the same question. Usually helps on factual work.",
+        outcome: "remembers the same things, more consistently worded.",
+        delta: 0.06, remembered: Math.max(0, total - 1), total, speedRatio: 1,
+        patch: { params: { temperature: 0 } },
+      },
+    ],
+  };
+}
+
+function tuneScopeNote() {
+  const n = state.cases.length;
+  if (!n) return "Teach it something first — there's nothing to measure a change against yet.";
+  return `It'll try around 7 different setups against your ${n} lesson${n === 1 ? "" : "s"}, one at a time. This takes a while — you can close this and come back.`;
+}
+
+async function startTuning() {
+  if (!state.cases.length) { setText("tune-hint", "Teach it something first."); return; }
+
+  $("#tune-start").hidden = true;
+  $("#tune-working").hidden = false;
+  $("#tune-results").innerHTML = "";
+  state.tuneResult = null;
+  setText("tune-hint", "");
+
+  if (!state.live) {
+    // Walk the same progress states the real job reports.
+    const steps = ["Checking how your current setup does", 'Drop "Search my files"', "Switch to New and fast", "Make it more predictable", "Checking whether those changes work together"];
+    for (let i = 0; i < steps.length; i++) {
+      showTuneProgress({ done: i, total: steps.length, note: steps[i] });
+      await new Promise((r) => setTimeout(r, 550));
+    }
+    state.tuneResult = demoTuneResult();
+    finishTuning();
+    return;
+  }
+
+  try {
+    const models = BRAINS.map((b) => b.id).filter((id) => id !== me().model);
+    state.tuneJob = await api("/api/tune", "POST", { loadoutId: me().id, candidateModels: models });
+    pollTuning();
+  } catch (e) {
+    setText("tune-hint", e.message);
+    $("#tune-start").hidden = false;
+    $("#tune-working").hidden = true;
+  }
+}
+
+function showTuneProgress(p) {
+  setText("tune-note", p.note || "Working…");
+  $("#tune-fill").style.width = `${p.total ? (p.done / p.total) * 100 : 0}%`;
+}
+
+function pollTuning() {
+  clearInterval(state.poller);
+  state.poller = setInterval(async () => {
+    try {
+      const job = await api(`/api/jobs/${state.tuneJob.id}`);
+      state.tuneJob = job;
+      showTuneProgress(job.progress);
+
+      if (job.status !== "running") {
+        clearInterval(state.poller);
+        state.poller = null;
+        if (job.status === "failed") {
+          setText("tune-hint", job.error ?? "It couldn't finish.");
+          $("#tune-start").hidden = false;
+          $("#tune-working").hidden = true;
+          return;
+        }
+        state.tuneResult = job.result ?? null;
+        Object.assign(state, await api("/api/state"));
+        finishTuning();
+      }
+    } catch (e) {
+      clearInterval(state.poller);
+      state.poller = null;
+      setText("tune-hint", e.message);
+      $("#tune-start").hidden = false;
+      $("#tune-working").hidden = true;
+    }
+  }, 900);
+}
+
+function finishTuning() {
+  $("#tune-working").hidden = true;
+  $("#tune-start").hidden = false;
+  renderTuneResults();
+  renderTop();
+}
+
+function liveFindings() {
+  const r = state.tuneResult;
+  if (!r) return [];
+  const all = [...(r.combined ? [r.combined] : []), ...r.findings];
+  return all.filter((f) => !state.dismissed.has(f.label));
+}
+
+function renderTuneResults() {
+  const el = $("#tune-results");
+  const r = state.tuneResult;
+  if (!r) { el.innerHTML = ""; return; }
+
+  const findings = liveFindings();
+  if (!findings.length) {
+    el.innerHTML = `<div class="card">
+      <h2 class="card-title">Nothing worth changing</h2>
+      <p class="card-sub">It tried ${r.tried} different setups against your ${r.cases} lesson${r.cases === 1 ? "" : "s"} and couldn't beat what you already have. That's a good result.</p>
+    </div>`;
+    return;
+  }
+
+  el.innerHTML = `<div class="card">
+    <h2 class="card-title">It found ${findings.length} thing${findings.length === 1 ? "" : "s"}</h2>
+    <p class="card-sub">Each one was checked against every lesson you've taught it. Nothing has been changed yet.</p>
+    <p class="baseline-note">Right now it remembers ${r.baseline.remembered} of ${r.baseline.total}<span class="nerd-only mono"> · mean ${(r.baseline.mean * 100).toFixed(1)}% · ${r.baseline.tokensPerSec.toFixed(1)} tok/s · ${r.tried} setups tried</span></p>
+  </div>
+  <div class="found">${findings.map(findingHtml).join("")}</div>`;
+}
+
+function findingHtml(f, i) {
+  const free = f.delta < 0.04;
+  const ratio = Number.isFinite(f.speedRatio) ? f.speedRatio : 1;
+  const gain = free
+    ? ratio >= 1.25 ? `${ratio.toFixed(1)}× faster` : "costs nothing"
+    : `+${Math.round(f.delta * 100)} pts`;
+
+  return `<article class="finding ${free ? "is-free" : ""}" style="--i:${i}">
+    <span class="finding-label">${esc(f.label)}</span>
+    <span class="finding-gain">${esc(gain)}</span>
+    <span class="finding-why">${esc(f.reason)}</span>
+    <span class="finding-outcome">Tried it: ${esc(f.outcome)}</span>
+    <span class="finding-acts">
+      <button class="btn btn-go" data-apply="${esc(f.label)}">Do it</button>
+      <button class="btn" data-dismiss="${esc(f.label)}">No thanks</button>
+      <span class="nerd-only mono">${esc(JSON.stringify(f.patch))}</span>
+    </span>
+  </article>`;
+}
+
+async function applyFinding(label) {
+  const f = liveFindings().find((x) => x.label === label);
+  if (!f) return;
+  await change(f.patch);
+  state.dismissed.add(label);
+  renderTuneResults();
+  renderTryList();
+  renderTop();
+}
+
 // ── events ────────────────────────────────────────────────────────────────────
 
 $$(".tab").forEach((t) => t.addEventListener("click", () => show(t.dataset.view)));
@@ -778,6 +1050,31 @@ $("#btn-save-fix").addEventListener("click", () => {
 $("#btn-cancel-fix").addEventListener("click", showAnswer);
 
 $("#btn-try").addEventListener("click", () => tryBrain($("#try-model").value.trim()));
+
+$("#btn-health").addEventListener("click", async () => {
+  setText("health-hint", "Looking…");
+  await checkHealth();
+  setText("health-hint", "");
+  renderHealth();
+  renderAssistant();
+  renderTryList();
+});
+
+$("#btn-tune").addEventListener("click", startTuning);
+$("#btn-tune-stop").addEventListener("click", async () => {
+  if (state.live && state.tuneJob) await api(`/api/jobs/${state.tuneJob.id}`, "DELETE").catch(() => {});
+  clearInterval(state.poller);
+  state.poller = null;
+  $("#tune-working").hidden = true;
+  $("#tune-start").hidden = false;
+});
+
+$("#tune-results").addEventListener("click", (e) => {
+  const apply = e.target.dataset?.apply;
+  if (apply) { applyFinding(apply); return; }
+  const dismiss = e.target.dataset?.dismiss;
+  if (dismiss) { state.dismissed.add(dismiss); renderTuneResults(); renderTop(); }
+});
 
 $("#try-result").addEventListener("click", (e) => {
   const model = e.target.dataset?.switch;

@@ -23,6 +23,47 @@ get:
 > Remembers 3 of the 4 things you taught it. It's about twice as fast.
 > It forgot this: *Write a reply to a customer asking about our refund policy.*
 
+## It tunes itself
+
+Once there's a record of what good looks like for one specific person, the setup stops
+being a matter of taste and becomes a search problem. So the app searches it — different
+brains, different abilities, different settings — scoring each against that person's own
+lessons, without asking them anything.
+
+```
+$ npm run smoke
+7. now let it tune itself, with nobody watching
+     [0/8] Checking how your current setup does
+     [1/8] Drop "read_file"
+     [4/8] Switch to good-model
+     [7/8] Let it vary its wording more
+
+   it found:
+     +100 pts  Switch to good-model
+             why: A different brain, checked against everything you've taught this one.
+          result: remembers 1 more of the things you taught it.
+     +0 pts  Drop "read_file"
+             why: It has never been used on any task you've given it, and it costs
+                  2.6% of its room every single time.
+          result: remembers the same things, with more room left over to think.
+```
+
+Two rules keep it trustworthy, and both are enforced in `src/autotune.ts`:
+
+1. **It never changes anything.** It reports findings; a person applies them. The smoke
+   test asserts the stored setup is untouched after a full pass.
+2. **It never reports a number without a reason.** "12% better" is a result nobody can
+   check. "It never used this on any task you gave it, and it costs 2% of its room" is one
+   they can. Findings that don't move the score are still reported when they're free wins —
+   dropping an unused ability costs nothing and buys back room.
+
+The search is greedy rather than exhaustive: score the current setup, try one change at a
+time, keep what helped, then verify the winners still work *stacked together*, because
+changes that each help alone can fight when combined. Exhaustive search costs hundreds of
+model calls to beat that by a little, and this has to finish overnight on a laptop.
+
+A pass runs as a background job — start it, close the window, come back.
+
 ## Who this is for
 
 Normal people, first. Someone who doesn't know what a token is should never have to learn,
@@ -50,11 +91,23 @@ preferences stop being locked inside whichever model you happened to start with.
 npm install
 npm run build
 
-npm run ui        # -> http://localhost:4173
+npm start         # picks a free port, opens your browser
 
 # Or prove the whole loop offline, no model required.
 npm run smoke
 ```
+
+`npm start` is what a downloaded copy runs: no port to remember, no terminal step, and
+loopback-only so nothing is reachable from the network. To build a folder you can hand to
+someone:
+
+```bash
+npm run package   # -> build/LocalHarness/
+```
+
+That gives you `LocalHarness.command` (macOS), `LocalHarness.sh` (Linux) and
+`LocalHarness.bat` (Windows), with no dependencies to install. It still needs Node.js on
+the machine, which means it is not yet a real consumer download — see *Known limits*.
 
 The same thing is available as a CLI, against a real endpoint (Ollama shown; LM Studio,
 llama.cpp, vLLM, OpenRouter, Together and Fireworks all speak the same API):
@@ -78,10 +131,15 @@ node dist/cli.js compare <replayA> <replayB>
 
 ## The app
 
-`npm run ui` serves it on `localhost:4173`, reading and writing the same `.localharness/`
-directory the CLI uses. Four screens, in the order the loop runs: **Assistant** (set it
-up), **Ask it something** (do a task, judge it), **What it's learned** (your rules),
-**Try a new brain** (the payoff).
+Reads and writes the same `.localharness/` directory the CLI uses. Five screens, in the
+order the loop runs: **Assistant** (set it up), **Ask it something** (do a task, judge it),
+**What it's learned** (your rules), **Make it better** (let it tune itself), **Try a new
+brain** (the payoff).
+
+On startup it checks whether anything is actually serving models on the machine. If not, it
+says so in plain words with the fix, rather than letting the first real task fail for
+reasons a newcomer can't diagnose. When something *is* running, the brain picker lists what
+you have installed first and marks the rest *not downloaded*.
 
 Opened without a server — from a file, or as a shared page — it falls back to worked demo
 data. The fallback is not a mockup: giving it an ability really recomputes the budget, and
@@ -206,11 +264,22 @@ how you work, and it should never be somewhere you cannot read it.
 
 These are real and worth fixing before this is a product.
 
-- **Nobody installs the model for you.** The app assumes something is already serving an
-  OpenAI-compatible endpoint. For the audience this is aimed at, that assumption is the
-  single biggest thing standing between them and using it, and no amount of friendly
-  copy on the next screen fixes it. Bundling a runtime, or shipping a hosted
-  open-weight endpoint as the default, is the real answer.
+- **It is not yet a real download.** `npm run package` produces a folder with a
+  double-clickable launcher and zero dependencies, but it still needs Node.js installed.
+  For a genuine consumer download the options are Node's single-executable builds (small,
+  no window chrome) or Tauri (a real app window, needs Rust in the build). Neither is
+  wired up.
+- **Nobody installs the model for you.** The app now detects that nothing is running and
+  says so in plain words, which is better than failing silently — but detecting a problem
+  is not solving it. Someone still has to go install Ollama and pull a model. Bundling a
+  runtime, or defaulting to a hosted open-weight endpoint with local as the upgrade, is
+  the real answer.
+- **Tuning costs a lot of model calls.** A pass is roughly *candidates × lessons* runs,
+  so about 7 × your lesson count. That's fine overnight on a laptop and expensive on a
+  metered hosted endpoint. There is no spend cap, and there should be.
+- **Tuning is greedy, and greedy has blind spots.** It tries one change at a time and then
+  verifies the winners stacked. A pair of changes that only helps *together* — a bigger
+  context window plus an extra note, say — will never be found.
 - **The brain catalogue is illustrative.** Friendly names, notes and hardware
   requirements in `ui/app.js` are hand-written presentation, not measured. Anything the
   endpoint serves will run; the descriptions need to be checked before they're shown to
@@ -232,15 +301,21 @@ These are real and worth fixing before this is a product.
 
 ## Where this goes next
 
-Three things, in order.
+Four things, in order.
 
-**Get the model onto the machine.** Everything else is downstream of this. Right now the
-first screen assumes a running endpoint, which quietly excludes exactly the people this is
-for.
+**Get the model onto the machine.** Everything else is downstream of this. The app can now
+tell you nothing is running; it should be able to fix that itself — download a runtime and
+a starter model on first launch, with a progress bar and no terminal.
 
-**Make teaching free.** One click is good; zero is the target. The real answer is an
-editor or chat plugin, so a verdict comes from work already happening instead of work
-brought here specially.
+**Make teaching free.** One click is good; zero is the target. The real answer is an editor
+or chat plugin, so a verdict comes from work already happening instead of work brought here
+specially. Passive signals — did they copy the answer, did they immediately ask again —
+are labels nobody has to stop and give.
+
+**Tune on a schedule, not on a button.** The engine already runs unattended. The missing
+half is deciding *when* by itself: overnight, on idle, or when a new model appears — so the
+answer is waiting rather than requested. A notification saying "I found something better
+while you were asleep" is the moment this stops being a tool and starts being a service.
 
 **Let people curate what it learned.** Editing and retiring rules, from the app, in their
 own words. Owning something means being able to change your mind about it.

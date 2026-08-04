@@ -4,3 +4,4 @@ dist/
 # Captured runs, cases and replays are personal data. They are the whole point
 # of the product, but they do not belong in the tool's own repo.
 .localharness/
+build/
