@@ -1,10 +1,14 @@
 /* LocalHarness UI
  *
- * Talks to the local server when one is there, and falls back to a worked
- * demo when it is not. The fallback is not a mockup: equipping really
- * recomputes the budget, and fixing an answer really mines assertions out of
- * the diff, because those two moments are the entire product and a fake
- * version of them would prove nothing.
+ * The engine underneath counts tokens, mines assertions and computes mean
+ * scores. None of those words appear on screen unless you ask for them. What
+ * appears instead is room to think, things it can do, and things it learned —
+ * because the person this is for should never have to hold a mental model of
+ * a context window in order to own a good assistant.
+ *
+ * Talks to the local server when there is one, and falls back to a worked
+ * demo when there is not. The fallback really recomputes and really mines, so
+ * the two moments that matter are never faked.
  */
 
 // ── token estimation (mirrors src/tokens.ts) ──────────────────────────────────
@@ -23,9 +27,6 @@ function estimateTokens(text) {
   }
   return total;
 }
-
-const fmtTokens = (n) => (n < 1000 ? String(n) : `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`);
-const pct = (n) => `${(n * 100).toFixed(n >= 0.995 || n === 0 ? 0 : 1)}%`;
 
 // ── assertion mining (mirrors src/assertions.ts) ──────────────────────────────
 
@@ -74,45 +75,76 @@ function assertionsFromEdit(raw, corrected) {
   return out.slice(0, 8);
 }
 
-function assertionsFromAccept(output) {
-  return rank(segment(output)).slice(0, 3).map((value) => ({ kind: "contains", value, source: "auto", weight: 1 }));
-}
+const assertionsFromAccept = (o) =>
+  rank(segment(o)).slice(0, 3).map((value) => ({ kind: "contains", value, source: "auto", weight: 1 }));
+const assertionsFromReject = (o) =>
+  rank(segment(o)).slice(0, 3).map((value) => ({ kind: "not_contains", value, source: "auto", weight: 2 }));
 
-function assertionsFromReject(output) {
-  return rank(segment(output)).slice(0, 3).map((value) => ({ kind: "not_contains", value, source: "auto", weight: 2 }));
-}
+// ── the catalogue ─────────────────────────────────────────────────────────────
 
-// ── demo data ─────────────────────────────────────────────────────────────────
-
-const DEMO_TOOLS = [
-  { name: "read_file", description: "Read a UTF-8 text file from the working directory.", tokens: 106 },
-  { name: "list_files", description: "List files and directories at a path in the working directory.", tokens: 109 },
-  { name: "search_text", description: "Find files whose contents match a case-insensitive substring.", tokens: 158 },
-  { name: "run_tests", description: "Run the project's test suite and return failures.", tokens: 132, planned: true },
-  { name: "fetch_url", description: "Fetch a URL and return readable text.", tokens: 121, planned: true },
-  { name: "query_sql", description: "Run a read-only query against a configured database.", tokens: 186, planned: true },
+/**
+ * Presentation only — the engine will run any model the endpoint serves. The
+ * point is that "qwen2.5-coder:7b" tells a normal person nothing, while "needs
+ * a laptop with 8 GB to spare" tells them whether to bother.
+ *
+ * Sizes are the usual quantised downloads and are approximate on purpose.
+ */
+const BRAINS = [
+  {
+    id: "llama3.2:3b",
+    name: "Small and quick",
+    note: "Fine for short replies, tidying up text and simple questions.",
+    needs: "About 2 GB. Runs on almost any laptop.",
+  },
+  {
+    id: "qwen2.5-coder:7b",
+    name: "Good all-rounder",
+    note: "Handles code and careful writing. A sensible default.",
+    needs: "About 5 GB. Wants 8 GB of memory free.",
+  },
+  {
+    id: "deepseek-v4-flash",
+    name: "New and fast",
+    note: "The newest open model. Worth testing against what you've taught yours.",
+    needs: "Check what your machine can spare before downloading.",
+  },
+  {
+    id: "llama3.3:70b",
+    name: "Slow but thorough",
+    note: "Better at long, careful work. You will feel the wait.",
+    needs: "About 40 GB. Needs a serious machine.",
+  },
 ];
 
-const DEMO_MEMORY = { "TONE.md": 214, "GLOSSARY.md": 388, "REFUND-POLICY.md": 512 };
+const ABILITIES = {
+  read_file: { name: "Read a file", note: "Open a document you point it at." },
+  list_files: { name: "See what I have", note: "Look through the names of your files." },
+  search_text: { name: "Search my files", note: "Find which of your files mention something." },
+  run_tests: { name: "Check my code works", note: "Run your tests and report what failed.", soon: true },
+  fetch_url: { name: "Look things up online", note: "Read a web page you give it.", soon: true },
+  query_sql: { name: "Ask about my data", note: "Answer questions from a spreadsheet or database.", soon: true },
+};
 
-const DEMO_BASELINE = `Refunds are available within 14 days of purchase.
+const DEMO_NOTE_SIZES = { "TONE.md": 214, "about-my-work.md": 260, "refund-policy.md": 512, "GLOSSARY.md": 388 };
+
+const DEMO_BEFORE = `Refunds are available within 14 days of purchase.
 Contact support@example.com and we will process it.
 Shipping costs are refunded in full.`;
 
-const DEMO_CORRECTED = `Refunds are available within 30 days of purchase.
+const DEMO_AFTER = `Refunds are available within 30 days of purchase.
 Contact support@example.com and we will process it.
 Original shipping costs are non-refundable.`;
 
 function demoState() {
-  const loadout = {
+  const assistant = {
     id: "ld_demo",
-    name: "support-replies",
+    name: "My assistant",
     createdAt: new Date().toISOString(),
     model: "qwen2.5-coder:7b",
     baseUrl: "http://localhost:11434/v1",
     systemPrompt:
-      "You write short, accurate customer support replies. Match the tone in TONE.md. " +
-      "Never invent policy details — if the answer is not in the pinned notes, say so.",
+      "Write the way I do: short sentences, no jargon, no corporate padding. " +
+      "Never invent policy details — if the answer isn't in my notes, say you don't know.",
     tools: ["read_file", "search_text"],
     memory: ["TONE.md"],
     params: { temperature: 0.2 },
@@ -121,82 +153,95 @@ function demoState() {
 
   const cases = [
     {
-      id: "case_demo1",
-      createdAt: new Date().toISOString(),
-      title: "Draft a refund policy summary for a customer email.",
-      input: "Draft a refund policy summary for a customer email.",
+      id: "case_d1",
+      createdAt: "2026-08-01T10:12:00Z",
+      title: "Write a reply to a customer asking about our refund policy.",
+      input: "Write a reply to a customer asking about our refund policy.",
       loadoutId: "ld_demo",
-      reference: DEMO_CORRECTED,
-      origin: { runId: "run_demo1", verdict: "edit", model: "qwen2.5-coder:7b" },
-      assertions: assertionsFromEdit(DEMO_BASELINE, DEMO_CORRECTED),
+      reference: DEMO_AFTER,
+      origin: { runId: "r1", verdict: "edit", model: "qwen2.5-coder:7b" },
+      assertions: assertionsFromEdit(DEMO_BEFORE, DEMO_AFTER),
       graders: ["assertions", "judge"],
-      antiReference: DEMO_BASELINE,
-      tags: ["support"],
+      tags: [],
     },
     {
-      id: "case_demo2",
-      createdAt: new Date().toISOString(),
-      title: "Reply to a customer asking about EU shipping times.",
-      input: "Reply to a customer asking about EU shipping times.",
+      id: "case_d2",
+      createdAt: "2026-08-02T14:40:00Z",
+      title: "Answer a customer asking how long delivery takes in Europe.",
+      input: "Answer a customer asking how long delivery takes in Europe.",
       loadoutId: "ld_demo",
-      reference:
-        "EU orders usually arrive in 5-8 working days once dispatched.\nCustoms handling can add up to 3 days for orders outside the EU VAT scheme.",
-      origin: { runId: "run_demo2", verdict: "accept", model: "qwen2.5-coder:7b" },
+      reference: "EU orders usually arrive in 5-8 working days once they're dispatched.",
+      origin: { runId: "r2", verdict: "accept", model: "qwen2.5-coder:7b" },
       assertions: [
         { kind: "contains", value: "5-8 working days", source: "manual", weight: 2 },
         { kind: "not_contains", value: "next day delivery", source: "auto", weight: 1 },
       ],
       graders: ["assertions", "judge"],
-      tags: ["support"],
+      tags: [],
     },
     {
-      id: "case_demo3",
-      createdAt: new Date().toISOString(),
-      title: "Summarise this week's open bugs by severity.",
-      input: "Summarise this week's open bugs by severity.",
+      id: "case_d3",
+      createdAt: "2026-08-03T09:05:00Z",
+      title: "Summarise this week's support emails.",
+      input: "Summarise this week's support emails.",
       loadoutId: "ld_demo",
       reference: "",
-      origin: { runId: "run_demo3", verdict: "reject", model: "qwen2.5-coder:7b" },
+      origin: { runId: "r3", verdict: "reject", model: "qwen2.5-coder:7b" },
       assertions: [
-        { kind: "not_contains", value: "I do not have access to your bug tracker", source: "auto", weight: 2 },
+        { kind: "not_contains", value: "I don't have access to your email", source: "auto", weight: 2 },
       ],
       graders: ["assertions"],
-      tags: ["triage"],
+      tags: [],
     },
   ];
 
   const mk = (id, model, scores, speed) => ({
-    id,
-    createdAt: new Date().toISOString(),
-    model,
-    baseUrl: loadout.baseUrl,
-    loadoutId: loadout.id,
+    id, createdAt: new Date().toISOString(), model, baseUrl: assistant.baseUrl, loadoutId: assistant.id,
     results: cases.map((c, i) => ({
-      caseId: c.id,
-      title: c.title,
-      output: "",
-      score: scores[i],
-      graders: [],
-      ms: 2400,
-      tokensPerSec: speed,
+      caseId: c.id, title: c.title, output: "", score: scores[i], graders: [], ms: 2400, tokensPerSec: speed,
     })),
     summary: {
-      cases: cases.length,
-      scored: cases.length,
+      cases: cases.length, scored: cases.length,
       meanScore: scores.reduce((a, b) => a + b, 0) / scores.length,
-      medianTokensPerSec: speed,
-      failures: 0,
+      medianTokensPerSec: speed, failures: 0,
     },
   });
 
   return {
-    loadouts: [loadout],
-    tools: DEMO_TOOLS,
+    loadouts: [assistant],
+    tools: Object.entries(ABILITIES)
+      .filter(([, a]) => !a.soon)
+      .map(([name]) => ({ name, description: ABILITIES[name].note, tokens: { read_file: 106, list_files: 109, search_text: 158 }[name] })),
     cases,
-    replays: [
-      mk("rep_demo_old", "qwen2.5-coder:7b", [0.42, 0.91, 1], 31.4),
-      mk("rep_demo_new", "deepseek-v4-flash", [1, 0.88, 1], 74.2),
-    ],
+    replays: [mk("rep_a", "qwen2.5-coder:7b", [1, 0.85, 0.38], 31.4)],
+  };
+}
+
+/**
+ * Demo outcomes are fixed per brain rather than random, so clicking around the
+ * prototype shows the range the product actually has to report — clearly
+ * better, faster but forgetful, and slow but reliable — instead of noise.
+ * Anything typed by hand falls back to a stable hash.
+ */
+const DEMO_TRIALS = {
+  "deepseek-v4-flash": { remembers: 0.78, speed: 74 },
+  "llama3.2:3b": { remembers: 0.3, speed: 96 },
+  "llama3.3:70b": { remembers: 1, speed: 9 },
+};
+
+function demoTrial(model, n) {
+  const profile = DEMO_TRIALS[model];
+  if (!profile) {
+    const seed = [...model].reduce((s, c) => s + c.charCodeAt(0), 0);
+    return {
+      scores: Array.from({ length: n }, (_, i) => Math.min(1, 0.45 + ((seed + i * 41) % 55) / 100)),
+      speed: 25 + (seed % 60),
+    };
+  }
+  const passing = Math.round(n * profile.remembers);
+  return {
+    scores: Array.from({ length: n }, (_, i) => (i < passing ? 1 : 0.38)),
+    speed: profile.speed,
   };
 }
 
@@ -204,50 +249,63 @@ function demoState() {
 
 const state = {
   live: false,
-  view: "loadout",
-  loadouts: [],
-  tools: [],
-  cases: [],
-  replays: [],
+  view: "assistant",
+  loadouts: [], tools: [], cases: [], replays: [],
   activeId: null,
   run: null,
-  editing: false,
-  busy: false,
+  lastTry: null,
 };
 
-const $ = (sel) => document.querySelector(sel);
-const $$ = (sel) => [...document.querySelectorAll(sel)];
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-function active() {
-  return state.loadouts.find((l) => l.id === state.activeId) ?? state.loadouts[0];
+const me = () => state.loadouts.find((l) => l.id === state.activeId) ?? state.loadouts[0];
+
+/** Every ability the catalogue knows about, merged with what the server has. */
+function allAbilities() {
+  const known = new Map(state.tools.map((t) => [t.name, t.tokens]));
+  return Object.entries(ABILITIES).map(([name, a]) => ({
+    name,
+    label: a.name,
+    note: a.note,
+    soon: a.soon || !known.has(name),
+    tokens: known.get(name) ?? { run_tests: 132, fetch_url: 121, query_sql: 186 }[name] ?? 130,
+  }));
 }
 
-/** Compute the budget client-side so demo mode reacts exactly like the server. */
-function encumbranceOf(loadout) {
-  if (!loadout) return { systemTokens: 0, toolTokens: 0, memoryTokens: 0, total: 0, contextWindow: 1, ratio: 0, perMemory: [] };
-  if (state.live && loadout.encumbrance) return loadout.encumbrance;
+function brainFor(model) {
+  return BRAINS.find((b) => b.id === model) ?? { id: model, name: model, note: "", needs: "" };
+}
 
-  const systemTokens = estimateTokens(loadout.systemPrompt);
-  const toolTokens = loadout.tools.reduce(
-    (s, n) => s + (state.tools.find((t) => t.name === n)?.tokens ?? 0),
-    0,
-  );
-  const perMemory = loadout.memory.map((path) => ({
-    path,
-    tokens: DEMO_MEMORY[path] ?? 260,
-    missing: false,
-  }));
-  const memoryTokens = perMemory.reduce((s, m) => s + m.tokens, 0);
-  const total = systemTokens + toolTokens + memoryTokens;
-  return {
-    systemTokens,
-    toolTokens,
-    memoryTokens,
-    total,
-    contextWindow: loadout.contextWindow,
-    ratio: loadout.contextWindow > 0 ? total / loadout.contextWindow : 0,
-    perMemory,
-  };
+function roomOf(l) {
+  if (!l) return { instructions: 0, abilities: 0, notes: 0, total: 0, window: 1, ratio: 0, perNote: [] };
+  if (state.live && l.encumbrance) {
+    const e = l.encumbrance;
+    return {
+      instructions: e.systemTokens, abilities: e.toolTokens, notes: e.memoryTokens,
+      total: e.total, window: e.contextWindow, ratio: e.ratio, perNote: e.perMemory,
+    };
+  }
+  const instructions = estimateTokens(l.systemPrompt);
+  const abilities = l.tools.reduce((s, n) => s + (allAbilities().find((a) => a.name === n)?.tokens ?? 0), 0);
+  const perNote = l.memory.map((path) => ({ path, tokens: DEMO_NOTE_SIZES[path] ?? 260, missing: false }));
+  const notes = perNote.reduce((s, m) => s + m.tokens, 0);
+  const total = instructions + abilities + notes;
+  return { instructions, abilities, notes, total, window: l.contextWindow, ratio: total / (l.contextWindow || 1), perNote };
+}
+
+/** A share of the room, which people read fine — unlike a token count. */
+function sharePct(tokens, window) {
+  const p = (tokens / (window || 1)) * 100;
+  if (p > 0 && p < 0.1) return "<0.1%";
+  return `${p < 10 ? p.toFixed(1) : Math.round(p)}%`;
+}
+
+function share(tokens, window) {
+  const p = (tokens / (window || 1)) * 100;
+  if (p < 0.5) return "a sliver of its room";
+  return `${sharePct(tokens, window)} of its room`;
 }
 
 // ── api ───────────────────────────────────────────────────────────────────────
@@ -265,14 +323,11 @@ async function api(path, method = "GET", body) {
 
 async function boot() {
   try {
-    // Opened from disk there is no server to find, and the attempt only logs a
-    // CORS error to the console.
     if (location.protocol === "file:") throw new Error("no server");
     const snap = await api("/api/state");
     Object.assign(state, snap, { live: true });
     if (!state.loadouts.length) {
-      const l = await api("/api/loadouts", "POST", { name: "default" });
-      state.loadouts = [l];
+      state.loadouts = [await api("/api/loadouts", "POST", { name: "My assistant" })];
     }
   } catch {
     Object.assign(state, demoState(), { live: false });
@@ -281,503 +336,463 @@ async function boot() {
   renderAll();
 }
 
-async function patchLoadout(changes) {
-  const l = active();
+async function change(patch) {
+  const l = me();
   if (!l) return;
-  Object.assign(l, changes);
+  Object.assign(l, patch);
   if (state.live) {
     try {
-      const updated = await api(`/api/loadouts/${l.id}`, "PATCH", changes);
-      Object.assign(l, updated);
+      Object.assign(l, await api(`/api/loadouts/${l.id}`, "PATCH", patch));
     } catch (e) {
-      setHint("run-hint", e.message);
+      setText("run-hint", e.message);
     }
   }
-  renderGauge();
-  renderLoadout();
+  renderAssistant();
+  renderTop();
 }
 
-// ── rendering ─────────────────────────────────────────────────────────────────
+// ── render ────────────────────────────────────────────────────────────────────
+
+function setText(id, t) { $(`#${id}`).textContent = t; }
 
 function renderAll() {
-  renderConn();
-  renderGauge();
-  renderLoadout();
-  renderSuite();
-  renderTrials();
-  renderCounts();
-  showView(state.view);
+  renderTop();
+  renderAssistant();
+  renderLearned();
+  renderTryList();
+  show(state.view);
 }
 
-function renderConn() {
-  const el = $("#conn");
-  el.classList.toggle("is-live", state.live);
-  el.classList.toggle("is-demo", !state.live);
-  el.querySelector(".conn-text").textContent = state.live ? "connected" : "demo data";
-  $("#conn-note").textContent = state.live
-    ? "Reading and writing your local suite."
-    : "No server found. Equipping and capture still work — nothing is saved.";
+function renderTop() {
+  const l = me();
+  const n = state.cases.length;
+  setText("who-name", l?.name && l.name !== "default" ? l.name : "Your assistant");
+  setText(
+    "who-sub",
+    `${brainFor(l?.model).name}${state.live ? "" : " · demo"} · ${n} thing${n === 1 ? "" : "s"} learned`,
+  );
+  setText("pip-learned", n);
 }
 
-function renderCounts() {
-  $('[data-count="cases"]').textContent = state.cases.length;
-  $('[data-count="replays"]').textContent = state.replays.length;
-  $("#g-cases").textContent = state.cases.length;
-}
-
-function renderGauge() {
-  const l = active();
-  const e = encumbranceOf(l);
-  const free = Math.max(0, e.contextWindow - e.total);
-
-  $("#g-free").textContent = fmtTokens(free);
-  $("#g-of").textContent = `of ${fmtTokens(e.contextWindow)} window`;
-  $("#g-pct").textContent = pct(e.ratio);
-  $("#g-system").textContent = fmtTokens(e.systemTokens);
-  $("#g-tools").textContent = fmtTokens(e.toolTokens);
-  $("#g-memory").textContent = fmtTokens(e.memoryTokens);
-  $("#g-model").textContent = l?.model ?? "—";
-
-  const w = (n) => `${Math.min(100, (n / Math.max(1, e.contextWindow)) * 100)}%`;
-  $("#seg-system").style.width = w(e.systemTokens);
-  $("#seg-tools").style.width = w(e.toolTokens);
-  $("#seg-memory").style.width = w(e.memoryTokens);
-
-  const gauge = $(".gauge");
-  gauge.classList.toggle("is-warn", e.ratio >= 0.5 && e.ratio < 0.75);
-  gauge.classList.toggle("is-redline", e.ratio >= 0.75);
-
-  const warn = $("#g-warn");
-  if (e.ratio >= 0.75) {
-    warn.hidden = false;
-    warn.textContent = "Past the redline. The harness is crowding out the task itself — drop a tool or a pinned note.";
-  } else if (e.ratio >= 0.5) {
-    warn.hidden = false;
-    warn.textContent = "Over half the window is gone before the task starts.";
-  } else {
-    warn.hidden = true;
-  }
-
-  const speed = state.run?.stats?.tokensPerSec ?? state.replays.at(-1)?.summary.medianTokensPerSec;
-  $("#g-speed").textContent = speed ? `${speed.toFixed(1)} tok/s` : "—";
-
-  renderStandings(l);
-}
-
-/** Best score per model, so re-running a trial replaces rather than duplicates. */
-function renderStandings(loadout) {
-  const best = new Map();
-  for (const r of state.replays) {
-    const prev = best.get(r.model);
-    if (!prev || r.summary.meanScore > prev.summary.meanScore) best.set(r.model, r);
-  }
-
-  const rows = [...best.values()].sort((a, b) => b.summary.meanScore - a.summary.meanScore).slice(0, 5);
-  $("#standings").hidden = rows.length === 0;
-  if (!rows.length) return;
-
-  $("#standings-list").innerHTML = rows
-    .map((r) => {
-      const s = r.summary.meanScore;
-      const hue = s >= 0.8 ? "var(--green)" : s >= 0.5 ? "var(--system)" : "var(--red)";
-      return `<li class="standing ${r.model === loadout?.model ? "is-current" : ""}">
-        <span class="standing-name">${esc(r.model)}</span>
-        <span class="standing-score" style="color:${hue}">${pct(s)}</span>
-        <span class="standing-track"><span class="standing-fill" style="width:${s * 100}%;background:${hue}"></span></span>
-      </li>`;
-    })
-    .join("");
-}
-
-function renderLoadout() {
-  const l = active();
+function renderAssistant() {
+  const l = me();
   if (!l) return;
+  const r = roomOf(l);
 
-  const picker = $("#loadout-picker");
-  picker.innerHTML = state.loadouts.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("");
-  picker.value = l.id;
+  // room to think
+  const card = $(".room");
+  card.classList.toggle("is-tight", r.ratio >= 0.6 && r.ratio < 0.8);
+  card.classList.toggle("is-full", r.ratio >= 0.8);
+  setText(
+    "room-verdict",
+    r.ratio < 0.35 ? "Plenty of room" : r.ratio < 0.6 ? "Comfortable" : r.ratio < 0.8 ? "Getting full" : "Too full",
+  );
+  setText(
+    "room-note",
+    r.ratio >= 0.8
+      ? "There's barely room left for your actual question. It will start losing track of what you said. Take something away."
+      : r.ratio >= 0.6
+        ? "It's carrying a lot before you've even asked anything. Consider dropping an ability or a note."
+        : "Everything you give it — instructions, abilities, notes — takes up space it could be using to think about your actual question.",
+  );
+  const w = (n) => `${Math.min(100, (n / (r.window || 1)) * 100)}%`;
+  $("#seg-instructions").style.width = w(r.instructions);
+  $("#seg-abilities").style.width = w(r.abilities);
+  $("#seg-notes").style.width = w(r.notes);
+  setText("room-instructions", sharePct(r.instructions, r.window));
+  setText("room-abilities", sharePct(r.abilities, r.window));
+  setText("room-notes", sharePct(r.notes, r.window));
+  setText("room-nerd", `${r.total} of ${r.window} tokens · ${(r.ratio * 100).toFixed(1)}% · ${l.model} @ ${l.baseUrl}`);
+
+  // brains
+  $("#brain-list").innerHTML = BRAINS.map((b) => brainHtml(b, b.id === l.model, "pick")).join("");
 
   if (document.activeElement !== $("#f-model")) $("#f-model").value = l.model;
   if (document.activeElement !== $("#f-baseurl")) $("#f-baseurl").value = l.baseUrl;
   if (document.activeElement !== $("#f-context")) $("#f-context").value = l.contextWindow;
   if (document.activeElement !== $("#f-system")) $("#f-system").value = l.systemPrompt;
-  $("#cost-system").textContent = `${estimateTokens(l.systemPrompt)} tok`;
 
-  const costClass = (n) => (n < 120 ? "cost-1" : n < 170 ? "cost-2" : "cost-3");
-
-  $("#gear-list").innerHTML = state.tools
-    .map((t) => {
-      const on = l.tools.includes(t.name);
-      return `<li class="gear-card ${on ? "is-on" : ""} ${t.planned ? "is-planned" : ""}">
-        <span class="gear-name">${esc(t.name)}${t.planned ? '<span class="chip">not built yet</span>' : ""}</span>
-        <span class="cost ${costClass(t.tokens)}">${t.tokens} tok</span>
-        <button class="btn" data-tool="${esc(t.name)}" ${t.planned ? "disabled" : ""}>${on ? "Unequip" : "Equip"}</button>
-        <p class="gear-desc">${esc(t.description)}</p>
+  // abilities
+  $("#ability-list").innerHTML = allAbilities()
+    .map((a) => {
+      const on = l.tools.includes(a.name);
+      return `<li class="ability ${on ? "is-on" : ""} ${a.soon ? "is-soon" : ""}">
+        <span class="ability-name">${esc(a.label)}${a.soon ? '<span class="tagline">not built yet</span>' : ""}</span>
+        <button class="btn ability-btn" data-ability="${esc(a.name)}" ${a.soon ? "disabled" : ""}>${on ? "Remove" : "Give it this"}</button>
+        <span class="ability-note">${esc(a.note)}</span>
+        <span class="ability-cost">Takes up ${share(a.tokens, r.window)}<span class="nerd-only mono"> · ${a.tokens} tok · ${esc(a.name)}</span></span>
       </li>`;
     })
     .join("");
 
-  const e = encumbranceOf(l);
-  $("#pin-list").innerHTML = l.memory.length
+  // things it always knows
+  $("#note-list").innerHTML = l.memory.length
     ? l.memory
         .map((path) => {
-          const m = e.perMemory.find((x) => x.path === path);
-          return `<li class="pin ${m?.missing ? "is-missing" : ""}">
+          const m = r.perNote.find((x) => x.path === path);
+          return `<li class="note ${m?.missing ? "is-missing" : ""}">
             <span>${esc(path)}</span>
-            <span class="cost pin-cost ${m?.missing ? "" : "cost-2"}">${m?.missing ? "not found" : `${m?.tokens ?? 0} tok`}</span>
-            <button class="btn" data-unpin="${esc(path)}">Remove</button>
+            <span class="note-meta">${m?.missing ? "can't find this file" : `takes up ${share(m?.tokens ?? 0, r.window)}`}</span>
+            <button class="btn" data-forget="${esc(path)}">Remove</button>
           </li>`;
         })
         .join("")
-    : '<li><p class="empty">Nothing pinned. The model starts every task with no context about you.</p></li>';
+    : '<li><p class="empty">Nothing yet. Add a file and it will read it before every answer.</p></li>';
 }
 
-function renderSuite() {
-  const el = $("#suite-list");
+function brainHtml(b, current, action) {
+  return `<li>
+    <button class="brain ${current ? "is-on" : ""}" data-brain="${esc(b.id)}" data-action="${action}" ${current && action === "pick" ? "disabled" : ""}>
+      <span class="brain-name">${esc(b.name)}${current ? '<span class="badge">using this</span>' : ""}</span>
+      <span class="brain-pick">${current ? "" : action === "pick" ? "Use this" : "Test it"}</span>
+      <span class="brain-note">${esc(b.note)}</span>
+      <span class="brain-needs">${esc(b.needs)}<span class="nerd-only mono"> · ${esc(b.id)}</span></span>
+    </button>
+  </li>`;
+}
+
+function ruleHtml(a, i = 0) {
+  const always = a.kind === "contains";
+  return `<li class="rule ${always ? "rule-always" : "rule-never"}" style="--i:${i}">
+    <span class="rule-kind">${always ? "Always say" : "Never say"}</span>
+    <span class="rule-text">${esc(a.value)}</span>
+  </li>`;
+}
+
+function whenText(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { day: "numeric", month: "long" });
+}
+
+function renderLearned() {
+  const el = $("#learned-list");
   if (!state.cases.length) {
-    el.innerHTML =
-      '<div class="panel"><p class="empty">No cases yet. Run a task and give it a verdict — that is all it takes.</p></div>';
+    el.innerHTML = `<div class="card">
+      <p class="empty">Nothing yet. Ask it to do something on the previous tab, then tell it whether it got it right — that's all there is to it.</p>
+    </div>`;
     return;
   }
+  const tagFor = { edit: ["tag-fixed", "you fixed it"], accept: ["tag-kept", "you kept it"], reject: ["tag-wrong", "you said no"] };
+
   el.innerHTML = state.cases
     .map((c) => {
-      const v = c.origin.verdict;
-      return `<article class="case">
-        <div class="case-head">
-          <span class="verdict-chip vc-${v}">${v === "edit" ? "fixed" : v === "accept" ? "kept" : "rejected"}</span>
-          <h3 class="case-title">${esc(c.title)}</h3>
-          <span class="case-meta">${c.assertions.length} check${c.assertions.length === 1 ? "" : "s"}${c.tags.length ? ` · ${c.tags.map((t) => `#${esc(t)}`).join(" ")}` : ""}</span>
+      const [cls, label] = tagFor[c.origin.verdict] ?? ["", c.origin.verdict];
+      return `<article class="card lesson">
+        <div class="lesson-head">
+          <h2 class="lesson-title">${esc(c.title)}</h2>
         </div>
-        <ul class="asserts" role="list">${c.assertions.map(assertHtml).join("")}</ul>
+        <div class="lesson-head">
+          <span class="tagline ${cls}">${label}</span>
+          <span class="lesson-when">${whenText(c.createdAt)}</span>
+        </div>
+        <ul class="rules" role="list">${c.assertions.map((a, i) => ruleHtml(a, i)).join("")}</ul>
       </article>`;
     })
     .join("");
 }
 
-function assertHtml(a, i = 0) {
-  const must = a.kind === "contains";
-  return `<li class="assert ${must ? "assert-must" : "assert-never"}" style="--i:${i}">
-    <span class="assert-kind">${must ? "must say" : "never say"}</span>
-    <span class="assert-value">${esc(a.value)}</span>
-  </li>`;
+function renderTryList() {
+  const l = me();
+  $("#try-list").innerHTML = BRAINS.filter((b) => b.id !== l?.model).map((b) => brainHtml(b, false, "try")).join("");
 }
 
-function scoreClass(s) {
-  return s >= 0.8 ? "s-good" : s >= 0.5 ? "s-mid" : "s-bad";
-}
-
-function renderTrials() {
-  const el = $("#trial-results");
-  if (!state.replays.length) {
-    el.innerHTML = "";
-    return;
-  }
-  const recent = [...state.replays].slice(-4).reverse();
-
-  const trials = recent
-    .map(
-      (r) => `<div class="panel trial">
-      <div class="trial-head">
-        <h3 class="trial-model">${esc(r.model)}</h3>
-        <span class="panel-note">${r.summary.medianTokensPerSec.toFixed(1)} tok/s median</span>
-        <span class="trial-mean ${scoreClass(r.summary.meanScore).replace("s-", "mean-")}">${pct(r.summary.meanScore)}</span>
-      </div>
-      ${r.results
-        .map(
-          (x) => `<div class="result ${scoreClass(x.score)}">
-          <span class="result-score">${pct(x.score)}</span>
-          <div class="result-body">
-            <div class="result-title">${esc(x.title)}</div>
-            <div class="result-track"><div class="result-fill" style="width:${x.score * 100}%"></div></div>
-          </div>
-        </div>`,
-        )
-        .join("")}
-    </div>`,
-    )
-    .join("");
-
-  el.innerHTML = compareHtml() + trials;
-}
-
-function compareHtml() {
-  if (state.replays.length < 2) return "";
-  const b = state.replays.at(-1);
-  const a = state.replays.at(-2);
-  const byCase = new Map(a.results.map((r) => [r.caseId, r]));
-  const moves = [];
-
-  for (const rb of b.results) {
-    const ra = byCase.get(rb.caseId);
-    if (!ra) continue;
-    const d = rb.score - ra.score;
-    if (Math.abs(d) >= 0.15) {
-      moves.push(
-        `<span class="delta-line ${d > 0 ? "delta-up" : "delta-down"}">${d > 0 ? "▲" : "▼"} ${esc(rb.title)} — ${pct(ra.score)} → ${pct(rb.score)}</span>`,
-      );
-    }
-  }
-
-  const dm = b.summary.meanScore - a.summary.meanScore;
-  return `<div class="panel"><div class="delta">
-    <span class="delta-line"><b>${esc(a.model)}</b> → <b>${esc(b.model)}</b></span>
-    <span class="delta-line ${dm >= 0 ? "delta-up" : "delta-down"}">${pct(a.summary.meanScore)} → ${pct(b.summary.meanScore)} (${dm >= 0 ? "+" : ""}${(dm * 100).toFixed(1)} pts) · ${a.summary.medianTokensPerSec.toFixed(0)} → ${b.summary.medianTokensPerSec.toFixed(0)} tok/s</span>
-    ${moves.join("") || '<span class="delta-line">No case moved by more than 15 points.</span>'}
-  </div></div>`;
-}
-
-function esc(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-}
-
-function setHint(id, text) {
-  $(`#${id}`).textContent = text;
-}
-
-function showView(view) {
+function show(view) {
   state.view = view;
   $$(".view").forEach((v) => (v.hidden = v.dataset.view !== view));
-  $$(".nav-item").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === view)));
+  $$(".tab").forEach((t) => t.setAttribute("aria-pressed", String(t.dataset.view === view)));
+  window.scrollTo({ top: 0, behavior: "instant" });
 }
 
-// ── run + capture ─────────────────────────────────────────────────────────────
+// ── asking it something ───────────────────────────────────────────────────────
 
 function demoAnswer(task) {
-  if (/refund/i.test(task)) return DEMO_BASELINE;
-  return `Here is a draft for: ${task.trim()}\n\nI have kept it short and avoided inventing specifics that are not in the pinned notes.`;
+  if (/refund/i.test(task)) return DEMO_BEFORE;
+  return `Here's a draft for: ${task.trim()}\n\nI've kept it short and stuck to what's in your notes.`;
 }
 
-async function doRun() {
+async function ask() {
   const input = $("#task-input").value.trim();
-  if (!input) { setHint("run-hint", "Type the task first."); return; }
+  if (!input) { setText("run-hint", "Type what you need first."); return; }
 
-  const l = active();
-  state.busy = true;
   $("#btn-run").disabled = true;
-  setHint("run-hint", "Running…");
-  $("#capture-panel").hidden = true;
+  setText("run-hint", "Thinking…");
+  $("#taught-card").hidden = true;
 
   try {
     if (state.live) {
-      state.run = await api("/api/run", "POST", { loadoutId: l.id, input });
+      state.run = await api("/api/run", "POST", { loadoutId: me().id, input });
     } else {
-      await new Promise((r) => setTimeout(r, 550));
-      const output = demoAnswer(input);
+      await new Promise((r) => setTimeout(r, 600));
       state.run = {
-        id: `run_demo_${Date.now()}`,
-        input,
-        output,
-        model: l.model,
-        stats: { ms: 2380, tokensPerSec: 31.4, encumbranceRatio: encumbranceOf(l).ratio },
+        id: `run_d${Date.now()}`, input, output: demoAnswer(input), model: me().model,
+        stats: { ms: 2380, tokensPerSec: 31.4, encumbranceRatio: roomOf(me()).ratio },
       };
     }
-    showOutput();
-    setHint("run-hint", "");
+    showAnswer();
+    setText("run-hint", "");
   } catch (e) {
-    setHint("run-hint", e.message);
+    setText("run-hint", e.message);
   } finally {
-    state.busy = false;
     $("#btn-run").disabled = false;
-    renderGauge();
   }
 }
 
-function showOutput() {
+function showAnswer() {
   const r = state.run;
-  $("#output-panel").hidden = false;
-  $("#run-output").hidden = false;
-  $("#run-output").textContent = r.output || "(no output)";
-  $("#run-edit").hidden = true;
-  $("#verdict-bar").hidden = false;
-  $("#edit-bar").hidden = true;
-  state.editing = false;
-  $("#run-stats").textContent = `${r.stats.ms} ms · ${r.stats.tokensPerSec.toFixed(1)} tok/s · harness took ${pct(r.stats.encumbranceRatio)}`;
+  $("#answer-card").hidden = false;
+  $("#answer-text").hidden = false;
+  $("#answer-text").textContent = r.output || "(it didn't say anything)";
+  $("#answer-edit").hidden = true;
+  $("#judge-bar").hidden = false;
+  $("#fix-bar").hidden = true;
+  setText("run-nerd", `${r.stats.ms} ms · ${r.stats.tokensPerSec.toFixed(1)} tok/s · ${r.model}`);
 }
 
-function beginEdit() {
-  state.editing = true;
-  $("#run-output").hidden = true;
-  $("#run-edit").hidden = false;
-  $("#run-edit").value = state.run.output;
-  $("#verdict-bar").hidden = true;
-  $("#edit-bar").hidden = false;
-  $("#run-edit").focus();
+function startFix() {
+  $("#answer-text").hidden = true;
+  $("#answer-edit").hidden = false;
+  $("#answer-edit").value = state.run.output;
+  $("#judge-bar").hidden = true;
+  $("#fix-bar").hidden = false;
+  $("#answer-edit").focus();
 }
 
-async function capture(kind, correctedOutput) {
+async function teach(kind, corrected) {
   const r = state.run;
-  let evalCase;
+  let lesson;
 
   if (state.live) {
     try {
-      evalCase = await api("/api/capture", "POST", {
-        runId: r.id,
-        kind,
-        ...(correctedOutput ? { correctedOutput } : {}),
-      });
-      const snap = await api("/api/state");
-      Object.assign(state, snap);
+      lesson = await api("/api/capture", "POST", { runId: r.id, kind, ...(corrected ? { correctedOutput: corrected } : {}) });
+      Object.assign(state, await api("/api/state"));
     } catch (e) {
-      setHint("run-hint", e.message);
+      setText("run-hint", e.message);
       return;
     }
   } else {
     const assertions =
-      kind === "edit"
-        ? assertionsFromEdit(r.output, correctedOutput)
-        : kind === "accept"
-          ? assertionsFromAccept(r.output)
-          : assertionsFromReject(r.output);
-    evalCase = {
-      id: `case_demo_${Date.now()}`,
-      createdAt: new Date().toISOString(),
-      title: r.input.split("\n")[0].slice(0, 72),
-      input: r.input,
-      loadoutId: active().id,
-      reference: kind === "edit" ? correctedOutput : kind === "accept" ? r.output : "",
+      kind === "edit" ? assertionsFromEdit(r.output, corrected)
+      : kind === "accept" ? assertionsFromAccept(r.output)
+      : assertionsFromReject(r.output);
+    lesson = {
+      id: `case_d${Date.now()}`, createdAt: new Date().toISOString(),
+      title: r.input.split("\n")[0].slice(0, 90), input: r.input, loadoutId: me().id,
+      reference: kind === "edit" ? corrected : kind === "accept" ? r.output : "",
       origin: { runId: r.id, verdict: kind, model: r.model },
-      assertions,
-      graders: kind === "reject" ? ["assertions"] : ["assertions", "judge"],
-      tags: [],
+      assertions, graders: kind === "reject" ? ["assertions"] : ["assertions", "judge"], tags: [],
     };
-    state.cases.push(evalCase);
+    state.cases.push(lesson);
   }
 
-  $("#output-panel").hidden = true;
-  $("#capture-panel").hidden = false;
-  $("#capture-note").textContent =
-    kind === "edit"
-      ? "Your correction became these checks. Every future model gets graded on them."
-      : kind === "accept"
-        ? "Kept as a reference answer, with a few anchors to catch a bad regression."
-        : "Recorded as something no model should say again.";
-  $("#capture-asserts").innerHTML = evalCase.assertions.length
-    ? evalCase.assertions.map((a, i) => assertHtml(a, i)).join("")
-    : '<li><p class="empty">Nothing distinctive enough to pin down automatically — you can add a check by hand.</p></li>';
+  $("#answer-card").hidden = true;
+  $("#taught-card").hidden = false;
+  setText(
+    "taught-sub",
+    kind === "edit" ? "Your changes turned into these rules."
+    : kind === "accept" ? "Kept as an example of a good answer."
+    : "Noted as something it shouldn't say again.",
+  );
+  $("#taught-rules").innerHTML = lesson.assertions.length
+    ? lesson.assertions.map((a, i) => ruleHtml(a, i)).join("")
+    : '<li><p class="empty">Nothing specific enough to turn into a rule this time — but the example is saved.</p></li>';
 
   state.run = null;
   $("#task-input").value = "";
-  renderSuite();
-  renderCounts();
+  renderLearned();
+  renderTop();
 }
 
-async function doTrial() {
-  const model = $("#trial-model").value.trim();
-  if (!model) { setHint("trial-hint", "Which model should the suite run against?"); return; }
-  if (!state.cases.length) { setHint("trial-hint", "Capture at least one case first."); return; }
+// ── the upgrade moment ────────────────────────────────────────────────────────
 
-  $("#btn-trial").disabled = true;
-  setHint("trial-hint", `Running ${state.cases.length} case${state.cases.length === 1 ? "" : "s"}…`);
+const REMEMBERED = 0.8;
+
+/** Whole sentences, so the caller never has to glue fragments together. */
+function speedSentence(now, before) {
+  if (!before || !now) return "";
+  const k = now / before;
+  if (k >= 1.8) return "It's about twice as fast as the one you're using.";
+  if (k >= 1.25) return "It's noticeably faster than the one you're using.";
+  if (k <= 0.55) return "It's around half the speed of the one you're using.";
+  if (k <= 0.8) return "It's noticeably slower than the one you're using.";
+  return "It runs at about the same speed.";
+}
+
+async function tryBrain(model) {
+  if (!model) { setText("try-hint", "Pick one, or type a name."); return; }
+  if (!state.cases.length) { setText("try-hint", "Teach it something first — there's nothing to check against yet."); return; }
+
+  $("#btn-try").disabled = true;
+  const n = state.cases.length;
+  setText("try-hint", `Checking ${n} thing${n === 1 ? "" : "s"} you've taught it…`);
 
   try {
+    let replay;
     if (state.live) {
-      const baseUrl = $("#trial-baseurl").value.trim();
-      await api("/api/replay", "POST", { model, ...(baseUrl ? { baseUrl } : {}) });
+      replay = await api("/api/replay", "POST", { model });
       Object.assign(state, await api("/api/state"));
+      replay = state.replays.at(-1);
     } else {
-      await new Promise((r) => setTimeout(r, 850));
-      // Demo scoring is arbitrary but stable per model name, so repeated runs
-      // of the same name do not jump around.
-      const seed = [...model].reduce((s, c) => s + c.charCodeAt(0), 0);
-      const scores = state.cases.map((_, i) => Math.min(1, 0.45 + (((seed + i * 37) % 60) / 100)));
-      state.replays.push({
-        id: `rep_demo_${Date.now()}`,
-        createdAt: new Date().toISOString(),
-        model,
-        baseUrl: active().baseUrl,
-        loadoutId: active().id,
-        results: state.cases.map((c, i) => ({
-          caseId: c.id, title: c.title, output: "", score: scores[i], graders: [], ms: 1800,
-          tokensPerSec: 40 + (seed % 50),
-        })),
+      await new Promise((r) => setTimeout(r, 900));
+      const { scores, speed } = demoTrial(model, n);
+      replay = {
+        id: `rep_d${Date.now()}`, createdAt: new Date().toISOString(), model, loadoutId: me().id,
+        results: state.cases.map((c, i) => ({ caseId: c.id, title: c.title, score: scores[i], output: "", graders: [], ms: 1800, tokensPerSec: speed })),
         summary: {
-          cases: state.cases.length, scored: state.cases.length,
-          meanScore: scores.reduce((a, b) => a + b, 0) / scores.length,
-          medianTokensPerSec: 40 + (seed % 50), failures: 0,
+          cases: n, scored: n, meanScore: scores.reduce((a, b) => a + b, 0) / n,
+          medianTokensPerSec: speed, failures: 0,
         },
-      });
+      };
+      state.replays.push(replay);
     }
-    setHint("trial-hint", "");
-    renderTrials();
-    renderCounts();
-    renderGauge();
+    state.lastTry = replay;
+    setText("try-hint", "");
+    renderTryResult();
   } catch (e) {
-    setHint("trial-hint", e.message);
+    setText("try-hint", e.message);
   } finally {
-    $("#btn-trial").disabled = false;
+    $("#btn-try").disabled = false;
   }
+}
+
+function renderTryResult() {
+  const r = state.lastTry;
+  const el = $("#try-result");
+  if (!r) { el.innerHTML = ""; return; }
+
+  const l = me();
+  const brain = brainFor(r.model);
+  const kept = r.results.filter((x) => x.score >= REMEMBERED);
+  const lost = r.results.filter((x) => x.score < REMEMBERED);
+  const total = r.results.length;
+
+  // Compare against the best run of what they are using now.
+  const mine = state.replays
+    .filter((x) => x.model === l.model && x.id !== r.id)
+    .sort((a, b) => b.summary.meanScore - a.summary.meanScore)[0];
+
+  const delta = mine ? r.summary.meanScore - mine.summary.meanScore : null;
+  const mood = delta === null ? "same" : delta >= 0.05 ? "better" : delta <= -0.05 ? "worse" : "same";
+
+  const headline =
+    delta === null
+      ? `${brain.name} remembers ${kept.length} of the ${total}.`
+      : mood === "better"
+        ? `${brain.name} is better than what you're using.`
+        : mood === "worse"
+          ? `${brain.name} isn't as good as what you're using.`
+          : `${brain.name} is about the same as what you're using.`;
+
+  const speed = mine ? speedSentence(r.summary.medianTokensPerSec, mine.summary.medianTokensPerSec) : "";
+
+  el.innerHTML = `<div class="card verdict-card is-${mood}">
+    <p class="verdict-big">${esc(headline)}</p>
+
+    <div class="score-line">
+      <span class="score-count">Remembers ${kept.length} of the ${total} thing${total === 1 ? "" : "s"} you taught it</span>
+      <span class="nerd-only mono">${(r.summary.meanScore * 100).toFixed(1)}% mean · ${r.summary.medianTokensPerSec.toFixed(1)} tok/s · ${esc(r.model)}</span>
+    </div>
+    <div class="pips">${r.results.map((x) => `<span class="pip-box ${x.score >= REMEMBERED ? "ok" : "no"}" title="${esc(x.title)}"></span>`).join("")}</div>
+
+    ${speed ? `<p class="speed-note">${esc(speed)}</p>` : ""}
+
+    ${lost.length ? `<div class="forgot">
+      <span class="forgot-head">It forgot ${lost.length === 1 ? "this" : "these"}:</span>
+      ${lost.map((x) => `<span class="forgot-item">${esc(x.title)}</span>`).join("")}
+    </div>` : ""}
+
+    <div class="verdict-acts">
+      <button class="btn btn-go" data-switch="${esc(r.model)}">Switch to it</button>
+      <button class="btn" data-switch-cancel>Stay where I am</button>
+    </div>
+    <p class="taught-foot">Switching keeps everything you've taught it. You can always switch back.</p>
+  </div>`;
 }
 
 // ── events ────────────────────────────────────────────────────────────────────
 
-$$(".nav-item").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
+$$(".tab").forEach((t) => t.addEventListener("click", () => show(t.dataset.view)));
 
-$("#loadout-picker").addEventListener("change", (e) => {
-  state.activeId = e.target.value;
-  renderGauge();
-  renderLoadout();
+$("#nerd-toggle").addEventListener("change", (e) => {
+  document.body.classList.toggle("show-nerd", e.target.checked);
 });
 
-$("#f-system").addEventListener("input", (e) => {
-  const l = active();
-  l.systemPrompt = e.target.value;
-  $("#cost-system").textContent = `${estimateTokens(l.systemPrompt)} tok`;
-  renderGauge();
+$("#brain-list").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-brain]");
+  if (!b) return;
+  const chosen = BRAINS.find((x) => x.id === b.dataset.brain);
+  change({ model: b.dataset.brain, ...(chosen?.context ? { contextWindow: chosen.context } : {}) });
+  renderTryList();
 });
-$("#f-system").addEventListener("change", (e) => patchLoadout({ systemPrompt: e.target.value }));
-$("#f-model").addEventListener("change", (e) => patchLoadout({ model: e.target.value }));
-$("#f-baseurl").addEventListener("change", (e) => patchLoadout({ baseUrl: e.target.value }));
-$("#f-context").addEventListener("input", (e) => {
-  const n = Number(e.target.value);
-  if (Number.isFinite(n) && n > 0) { active().contextWindow = n; renderGauge(); }
+
+$("#try-list").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-brain]");
+  if (b) tryBrain(b.dataset.brain);
 });
+
+$("#ability-list").addEventListener("click", (e) => {
+  const name = e.target.dataset?.ability;
+  if (!name) return;
+  const l = me();
+  change({ tools: l.tools.includes(name) ? l.tools.filter((t) => t !== name) : [...l.tools, name] });
+});
+
+$("#note-list").addEventListener("click", (e) => {
+  const path = e.target.dataset?.forget;
+  if (!path) return;
+  change({ memory: me().memory.filter((m) => m !== path) });
+});
+
+$("#note-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const path = $("#note-input").value.trim();
+  if (!path) return;
+  const l = me();
+  if (!l.memory.includes(path)) change({ memory: [...l.memory, path] });
+  $("#note-input").value = "";
+});
+
+$("#f-system").addEventListener("input", () => { me().systemPrompt = $("#f-system").value; renderAssistant(); });
+$("#f-system").addEventListener("change", (e) => change({ systemPrompt: e.target.value }));
+$("#f-model").addEventListener("change", (e) => { change({ model: e.target.value }); renderTryList(); });
+$("#f-baseurl").addEventListener("change", (e) => change({ baseUrl: e.target.value }));
 $("#f-context").addEventListener("change", (e) => {
   const n = Number(e.target.value);
-  if (Number.isFinite(n) && n > 0) patchLoadout({ contextWindow: n });
+  if (Number.isFinite(n) && n > 0) change({ contextWindow: n });
 });
 
-$("#gear-list").addEventListener("click", (e) => {
-  const name = e.target.dataset?.tool;
-  if (!name) return;
-  const l = active();
-  const tools = l.tools.includes(name) ? l.tools.filter((t) => t !== name) : [...l.tools, name];
-  patchLoadout({ tools });
-});
+$("#btn-run").addEventListener("click", ask);
+$("#task-input").addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") ask(); });
 
-$("#pin-list").addEventListener("click", (e) => {
-  const path = e.target.dataset?.unpin;
-  if (!path) return;
-  patchLoadout({ memory: active().memory.filter((m) => m !== path) });
-});
-
-$("#pin-form").addEventListener("submit", (e) => {
-  e.preventDefault();
-  const path = $("#pin-input").value.trim();
-  if (!path) return;
-  const l = active();
-  if (!l.memory.includes(path)) patchLoadout({ memory: [...l.memory, path] });
-  $("#pin-input").value = "";
-});
-
-$("#btn-run").addEventListener("click", doRun);
-$("#task-input").addEventListener("keydown", (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") doRun();
-});
-
-$("#verdict-bar").addEventListener("click", (e) => {
+$("#judge-bar").addEventListener("click", (e) => {
   const v = e.target.dataset?.verdict;
   if (!v) return;
-  if (v === "edit") beginEdit();
-  else capture(v);
+  if (v === "edit") startFix();
+  else teach(v);
 });
-
-$("#btn-save-edit").addEventListener("click", () => {
-  const corrected = $("#run-edit").value;
-  if (corrected.trim() === state.run.output.trim()) capture("accept");
-  else capture("edit", corrected);
+$("#btn-save-fix").addEventListener("click", () => {
+  const corrected = $("#answer-edit").value;
+  if (corrected.trim() === state.run.output.trim()) teach("accept");
+  else teach("edit", corrected);
 });
-$("#btn-cancel-edit").addEventListener("click", showOutput);
+$("#btn-cancel-fix").addEventListener("click", showAnswer);
 
-$("#btn-trial").addEventListener("click", doTrial);
+$("#btn-try").addEventListener("click", () => tryBrain($("#try-model").value.trim()));
+
+$("#try-result").addEventListener("click", (e) => {
+  const model = e.target.dataset?.switch;
+  if (model) {
+    change({ model });
+    renderTryList();
+    state.lastTry = null;
+    $("#try-result").innerHTML = "";
+    show("assistant");
+    return;
+  }
+  if (e.target.hasAttribute?.("data-switch-cancel")) {
+    state.lastTry = null;
+    $("#try-result").innerHTML = "";
+  }
+});
 
 boot();
