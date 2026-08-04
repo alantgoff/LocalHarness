@@ -28,57 +28,173 @@ function estimateTokens(text) {
   return total;
 }
 
-// ── assertion mining (mirrors src/assertions.ts) ──────────────────────────────
+// ── rule mining (mirrors src/mine.ts) ─────────────────────────────────────────
+//
+// Whole-sentence rules graded phrasing rather than meaning — an answer with
+// identical facts and different words scored 33%, below an answer with a wrong
+// fact. So: diff at word level, keep the smallest span that actually changed,
+// and let facts and prohibitions gate while preferred wording only informs.
 
-function segment(text) {
+const TOKEN = /[A-Za-z0-9][A-Za-z0-9'\u2019]*(?:[-\u2013][A-Za-z0-9'\u2019]+)*|[^\s]/gu;
+const isWord = (t) => /[A-Za-z0-9]/.test(t);
+const tokenize = (t) => t.match(TOKEN) ?? [];
+const norm = (s) => s.trim().replace(/\s+/g, " ").toLowerCase();
+const isFactual = (tokens) => tokens.some((t) => /\d/.test(t) || /@|https?:/.test(t) || /^[A-Z]{2,}$/.test(t));
+
+function diffTokens(a, b) {
+  const n = a.length, m = b.length;
+  const table = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      table[i][j] = a[i].toLowerCase() === b[j].toLowerCase()
+        ? table[i + 1][j + 1] + 1
+        : Math.max(table[i + 1][j], table[i][j + 1]);
+
+  const ops = [];
+  const push = (type, token) => {
+    const last = ops[ops.length - 1];
+    if (last && last.type === type) last.tokens.push(token);
+    else ops.push({ type, tokens: [token] });
+  };
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i].toLowerCase() === b[j].toLowerCase()) { push("same", a[i]); i++; j++; }
+    else if (table[i + 1][j] >= table[i][j + 1]) push("del", a[i++]);
+    else push("ins", b[j++]);
+  }
+  while (i < n) push("del", a[i++]);
+  while (j < m) push("ins", b[j++]);
+  return ops;
+}
+
+function phrase(tokens) {
+  const w = [...tokens];
+  while (w.length && !isWord(w[0])) w.shift();
+  while (w.length && !isWord(w[w.length - 1])) w.pop();
+  return w.join(" ");
+}
+
+function withContext(changed, before, after) {
+  let span = phrase(changed);
+  let left = 0, right = 0;
+  const specific = () => {
+    const words = span.split(" ").filter(isWord);
+    if (!words.length || span.length < 4) return false;
+    if (words.length === 1 && /^\d+$/.test(words[0])) return false;
+    return words.length >= 2 || span.length >= 8;
+  };
+  while (!specific() && (right < after.length || left < before.length) && left + right < 6) {
+    if (right < after.length) {
+      right++;
+      span = phrase([...changed, ...after.slice(0, right)]);
+      if (specific()) break;
+    }
+    if (left < before.length) {
+      left++;
+      span = phrase([...before.slice(before.length - left), ...changed, ...after.slice(0, right)]);
+    }
+  }
+  return span;
+}
+
+function strengthOf(kind, cls) {
+  if (kind === "not_contains") return { soft: false, weight: cls === "fact" ? 3 : 2 };
+  if (cls === "fact") return { soft: false, weight: 3 };
+  return { soft: true, weight: 1 };
+}
+
+function makeRule(kind, value, tokens, why) {
+  if (!value) return null;
+  const cls = isFactual(tokens) ? "fact" : "wording";
+  const { soft, weight } = strengthOf(kind, cls);
+  return { kind, value, class: cls, soft, weight, why, source: "auto" };
+}
+
+function discriminates(rule, original, corrected) {
+  const o = norm(original), c = norm(corrected), v = norm(rule.value);
+  if (!v) return false;
+  return rule.kind === "contains" ? c.includes(v) && !o.includes(v) : !c.includes(v) && o.includes(v);
+}
+
+function finalize(candidates, original, corrected) {
+  const seen = new Set();
+  const kept = [];
+  for (const r of candidates) {
+    const key = `${r.kind}:${norm(r.value)}`;
+    if (seen.has(key) || !discriminates(r, original, corrected)) continue;
+    seen.add(key);
+    kept.push(r);
+  }
+  kept.sort((a, b) => b.weight - a.weight || Number(a.soft) - Number(b.soft));
+  return kept.slice(0, 10);
+}
+
+function mineFromEdit(original, corrected) {
+  const ops = diffTokens(tokenize(original), tokenize(corrected));
   const out = [];
-  for (const line of text.split("\n")) {
-    const t = line.trim();
-    if (!t) continue;
-    if (t.length <= 160) { out.push(t); continue; }
-    for (const s of t.split(/(?<=[.!?])\s+/)) if (s.trim()) out.push(s.trim());
+  for (let k = 0; k < ops.length; k++) {
+    const op = ops[k];
+    if (op.type === "same") continue;
+    const prev = ops[k - 1]?.type === "same" ? ops[k - 1].tokens : [];
+    const nextOp = ops[k + 1];
+    const paired = op.type === "del" && nextOp?.type === "ins" ? nextOp : null;
+    const followOp = paired ? ops[k + 2] : nextOp;
+    const following = followOp?.type === "same" ? followOp.tokens : [];
+
+    if (op.type === "del") {
+      const r = makeRule("not_contains", withContext(op.tokens, prev, following), op.tokens,
+        paired ? "you replaced this" : "you removed this");
+      if (r) out.push(r);
+    }
+    if (paired || op.type === "ins") {
+      const added = paired ? paired.tokens : op.tokens;
+      const r = makeRule("contains", withContext(added, prev, following), added,
+        paired ? "you put this in its place" : "you added this");
+      if (r) out.push(r);
+    }
+    if (paired) k++;
+  }
+  return finalize(out, original, corrected);
+}
+
+function mineFromReject(output) {
+  return output.split("\n").map((l) => l.trim()).filter((l) => l.length >= 12).slice(0, 3)
+    .map((line) => makeRule("not_contains", phrase(tokenize(line)), tokenize(line), "you said this was wrong"))
+    .filter(Boolean);
+}
+
+function mineFromAccept(output) {
+  const out = [];
+  for (const line of output.split("\n")) {
+    const tokens = tokenize(line);
+    for (let i = 0; i < tokens.length; i++) {
+      if (!/\d/.test(tokens[i])) continue;
+      const span = withContext([tokens[i]], tokens.slice(Math.max(0, i - 3), i), tokens.slice(i + 1));
+      const r = makeRule("contains", span, [tokens[i]], "a fact in an answer you kept");
+      if (r && !out.some((x) => norm(x.value) === norm(r.value))) out.push(r);
+      if (out.length >= 3) return out;
+    }
   }
   return out;
 }
 
-function diffSegments(before, after) {
-  const n = before.length, m = after.length;
-  const table = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--)
-    for (let j = m - 1; j >= 0; j--)
-      table[i][j] = before[i] === after[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
-
-  const added = [], removed = [];
-  let i = 0, j = 0;
-  while (i < n && j < m) {
-    if (before[i] === after[j]) { i++; j++; }
-    else if (table[i + 1][j] >= table[i][j + 1]) removed.push(before[i++]);
-    else added.push(after[j++]);
-  }
-  while (i < n) removed.push(before[i++]);
-  while (j < m) added.push(after[j++]);
-  return { added, removed };
+/** Mirrors src/suite.ts — which lessons are actually worth anything. */
+function caseHealth(c) {
+  if (c.conflictsWith?.length) return "conflicted";
+  const trials = c.stats?.trials ?? 0;
+  if (trials < 3) return "new";
+  const p = c.stats.passes / trials;
+  if (p === 1) return "everyone-passes";
+  if (p === 0) return "nobody-passes";
+  return "useful";
 }
 
-function rank(segments) {
-  return [...new Set(segments)]
-    .filter((s) => s.length >= 12 && (s.match(/[A-Za-z0-9]{2,}/g) || []).length >= 2)
-    .sort((a, b) => b.length - a.length)
-    .slice(0, 8);
-}
-
-function assertionsFromEdit(raw, corrected) {
-  const { added, removed } = diffSegments(segment(raw), segment(corrected));
-  const out = [];
-  for (const v of rank(added)) out.push({ kind: "contains", value: v, source: "auto", weight: 2 });
-  for (const v of rank(removed)) out.push({ kind: "not_contains", value: v, source: "auto", weight: 1 });
-  return out.slice(0, 8);
-}
-
-const assertionsFromAccept = (o) =>
-  rank(segment(o)).slice(0, 3).map((value) => ({ kind: "contains", value, source: "auto", weight: 1 }));
-const assertionsFromReject = (o) =>
-  rank(segment(o)).slice(0, 3).map((value) => ({ kind: "not_contains", value, source: "auto", weight: 2 }));
+const HEALTH_NOTE = {
+  conflicted: "This clashes with something else you taught it — one of them can never pass.",
+  "everyone-passes": "Every brain tried so far gets this right. Kept as a safeguard, but it won't help you choose.",
+  "nobody-passes": "Nothing has ever passed this. That usually means the rule asks for something impossible.",
+  useful: "This one actually separates good answers from bad.",
+};
 
 // ── the catalogue ─────────────────────────────────────────────────────────────
 
@@ -160,7 +276,7 @@ function demoState() {
       loadoutId: "ld_demo",
       reference: DEMO_AFTER,
       origin: { runId: "r1", verdict: "edit", model: "qwen2.5-coder:7b" },
-      assertions: assertionsFromEdit(DEMO_BEFORE, DEMO_AFTER),
+      assertions: mineFromEdit(DEMO_BEFORE, DEMO_AFTER),
       graders: ["assertions", "judge"],
       tags: [],
     },
@@ -650,9 +766,14 @@ function brainHtml(b, current, action) {
 
 function ruleHtml(a, i = 0, editableCaseId = null) {
   const always = a.kind === "contains";
-  return `<li class="rule ${always ? "rule-always" : "rule-never"}" style="--i:${i}">
-    <span class="rule-kind">${always ? "Always say" : "Never say"}</span>
+  // Soft rules are a phrasing you preferred, not a requirement, and saying so
+  // is the difference between a rule and a superstition.
+  const label = a.soft ? "Prefers" : always ? "Must say" : "Never say";
+  return `<li class="rule ${always ? "rule-always" : "rule-never"} ${a.soft ? "rule-soft" : ""}" style="--i:${i}">
+    <span class="rule-kind">${label}</span>
     <span class="rule-text">${esc(a.value)}${
+      a.class === "fact" ? '<span class="rule-tag">a fact</span>' : ""
+    }${
       editableCaseId
         ? `<button class="rule-drop" data-drop="${esc(editableCaseId)}" data-index="${i}" title="Remove this rule" aria-label="Remove this rule">×</button>`
         : ""
@@ -698,6 +819,12 @@ function renderLearned() {
           <button class="lesson-edit" data-edit="${esc(c.id)}">${open ? "Done" : "Change this"}</button>
           <span class="lesson-when">${whenText(c.createdAt)}</span>
         </div>
+        ${(() => {
+          const h = caseHealth(c);
+          return h === "new" || h === "useful"
+            ? ""
+            : `<p class="case-health health-${h}">${esc(HEALTH_NOTE[h])}</p>`;
+        })()}
         ${c.assertions.length
           ? `<ul class="rules" role="list">${c.assertions.map((a, i) => ruleHtml(a, i, open ? c.id : null)).join("")}</ul>`
           : `<p class="empty">${c.origin.source === "implicit"
@@ -822,11 +949,11 @@ async function teach(kind, corrected, source = "explicit") {
     }
   } else {
     const assertions =
-      kind === "edit" ? assertionsFromEdit(r.output, corrected)
+      kind === "edit" ? mineFromEdit(r.output, corrected)
       // Mirrors src/capture.ts: an inferred accept keeps the example but mines
       // no rules, because copying does not mean every phrase was required.
-      : kind === "accept" ? (source === "implicit" ? [] : assertionsFromAccept(r.output))
-      : assertionsFromReject(r.output);
+      : kind === "accept" ? (source === "implicit" ? [] : mineFromAccept(r.output))
+      : mineFromReject(r.output);
     lesson = {
       id: `case_d${Date.now()}`, createdAt: new Date().toISOString(),
       title: r.input.split("\n")[0].slice(0, 90), input: r.input, loadoutId: me().id,

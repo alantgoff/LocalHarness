@@ -126,12 +126,51 @@ export interface Verdict {
 
 export type AssertionKind = "contains" | "not_contains" | "regex";
 
+/**
+ * What kind of correction a rule came from.
+ *
+ * A number is not paraphrasable — "30 days" means "30 days". A turn of phrase
+ * is, and treating the two the same is how a suite ends up scoring wording
+ * instead of meaning.
+ */
+export type RuleClass = "fact" | "content" | "wording";
+
 export interface Assertion {
   kind: AssertionKind;
   value: string;
   /** "auto" assertions were mined from an edit diff; "manual" were written. */
   source: "auto" | "manual";
   weight: number;
+  class?: RuleClass;
+  /** Soft rules inform a score but never fail an answer on their own. */
+  soft?: boolean;
+  /** Provenance, in the user's terms: "you put this in its place". */
+  why?: string;
+}
+
+/** A rule as mined, before it becomes a stored assertion. */
+export interface MinedRule {
+  kind: Exclude<AssertionKind, "regex">;
+  value: string;
+  class: RuleClass;
+  soft: boolean;
+  weight: number;
+  why: string;
+  source: "auto" | "manual";
+}
+
+/**
+ * How a case has behaved across everything that has attempted it.
+ *
+ * A case every model passes carries no information about which model to use;
+ * a case none has ever passed is more likely a broken rule than a universal
+ * failing. Knowing which is which turns a list of tests into an instrument.
+ */
+export interface CaseStats {
+  trials: number;
+  passes: number;
+  /** Models tried against it, so repeats do not inflate the count. */
+  models?: string[];
 }
 
 export type GraderKind = "exact" | "assertions" | "judge";
@@ -151,6 +190,9 @@ export interface EvalCase {
   /** Rejections are kept as negative references: do not produce this again. */
   antiReference?: string;
   tags: string[];
+  stats?: CaseStats;
+  /** Lessons this one appears to contradict, by id. */
+  conflictsWith?: string[];
 }
 
 export interface GraderResult {

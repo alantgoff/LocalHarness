@@ -112,7 +112,9 @@ npm run build
 npm start         # picks a free port, opens your browser
 
 # Or prove the whole loop offline, no model required.
-npm run smoke
+npm run smoke        # the whole loop, end to end
+npm run eval-quality # does the suite measure meaning or vocabulary
+npm run security     # things that were once exploitable
 ```
 
 `npm start` is what a downloaded copy runs: no port to remember, no terminal step, and
@@ -291,23 +293,69 @@ correction.
 
 ### 3. A fix becomes rules
 
-When you correct an answer, LocalHarness diffs your version against the original. Text you
-added becomes an *always say*. Text you deleted becomes a *never say*. Every future brain
-gets checked on the specific thing that was wrong.
+This is the part that decides whether the whole thing measures anything real, and the
+first version of it was wrong in a way worth writing down.
 
-From the smoke test — someone changed a refund window from 14 to 30 days:
+It took the whole changed sentence and required it verbatim. Measured against the
+correction below, it scored an answer with **identical facts and different wording at
+33%**, and an answer with a **wrong fact at 67%**. It was grading phrasing, and grading it
+backwards. A tuner fed those numbers rejects better models for choosing different words.
+
+Three ideas fix it, all in `src/mine.ts`:
+
+**Minimal spans.** When you change "14 days" to "30 days", the thing you corrected is the
+number, not the sentence around it. Diffing at word level and keeping the smallest span
+that differs turns a brittle sentence match into a durable one.
+
+**Prohibitions are stronger than requirements.** *Never say X* is reliably checkable — a
+model that regresses says the wrong thing, and there it is. *Always say Y* over-constrains,
+because a hundred phrasings are equally correct. So prohibitions gate, and requirements
+gate only when they name something unparaphrasable: a number, a date, an address, a code.
+Everything else is kept as **soft** — real signal, shown as *Prefers*, but it never fails
+an answer on vocabulary.
+
+**Rules must discriminate.** Every candidate is checked against both texts it came from. A
+rule the original already satisfied proves nothing; a rule the correction itself fails is
+broken. Both are dropped at mining time rather than left to rot in the suite.
+
+Same correction, through the new engine:
 
 ```
-Always say   Refunds are available within 30 days of purchase.
-Always say   Original shipping costs are non-refundable.
-Never say    Refunds are available within 14 days of purchase.
-Never say    Shipping costs are refunded in full.
+HARD  fact     never say  "14 days"            — you replaced this
+HARD  fact     must say   "30 days"            — you put this in its place
+HARD  wording  never say  "refunded in full"   — you replaced this
+soft  wording  prefers    "non-refundable"     — you put this in its place
 ```
 
-A model that learned the correction scores 100%. One that repeats the old mistake scores
-0%. One correction, made during real work, now separates good models from bad ones
-forever — and it's written in the user's own words, so they can read it back and delete it
-if they disagree.
+| | before | after |
+| --- | --- | --- |
+| the exact corrected text | 100% | 100% |
+| **identical facts, different wording** | **33%** | **100%** |
+| right window, wrong shipping | 67% | 75% |
+| completely wrong | 17% | 25% |
+
+`npm run eval-quality` holds all of that in place, including the assertion that a
+paraphrase must never again score below an answer with a wrong fact.
+
+### 4. The suite grades itself
+
+A lesson every model passes cannot help you choose a model — it is a regression guard, not
+a discriminator. A lesson *no* model has ever passed is far more likely to be a rule nobody
+could satisfy than a failing common to every model ever built. And two lessons that
+contradict each other guarantee one of them fails forever, dragging every score down for a
+reason no number explains.
+
+So every attempt is recorded against the case that produced it, and `src/suite.ts` reports
+what that evidence means:
+
+- **useful** — it actually separates good answers from bad, and carries the most weight in
+  an automated pass
+- **everyone passes** — kept as a safeguard, weighted down
+- **nobody passes** — surfaced for review, because the rule is the likely culprit
+- **conflicted** — two lessons ask for the same thing with different numbers; you are told
+  at the moment the second one is captured, while you still remember both
+
+Re-running the same model against a case is not new evidence and is not counted twice.
 
 ## Grading
 
@@ -380,9 +428,18 @@ These are real and worth fixing before this is a product.
 - **Token counts are estimates.** No tokenizer dependency; a heuristic that's
   directionally right within roughly 10-15%. Fine for "this ability takes 2% of its
   room", not fine as a hard remaining-capacity figure. Needs a real per-family tokenizer.
-- **Rules from a stated "that's right" are still noisy.** With no correction to diff, it
-  falls back to the answer's most distinctive lines, which over-specifies wording. Fixes
-  are the signal worth optimising for. (An *implicit* accept now mines nothing at all.)
+- **Semantic equivalence is still literal matching.** Facts survive paraphrase because a
+  number is a number, and prohibitions survive because a regression says the wrong thing
+  out loud. But a *rephrased* regression — "shipping is fully refunded" where the rule
+  bans "refunded in full" — slips through. Closing that needs embeddings or a judge, and
+  the judge is exactly what cannot be trusted unattended.
+- **Rules from a stated "that's right" are thin by design.** With no correction to diff
+  there is no evidence about which parts mattered, so only facts get anchored. That is
+  honest, but it means an accept teaches far less than a fix.
+- **Conflict detection only sees numbers.** Two lessons that disagree in prose — "be
+  brief" against "always explain your reasoning" — are invisible to it.
+- **Nothing ages.** Trial statistics accumulate forever; a lesson that stopped being true
+  in March still carries its old weight.
 - **One task at a time.** No multi-turn conversations captured yet.
 - **Prompt injection is mitigated, not solved.** The judge is delimited and warned, and
   nothing automated depends on it — but a case with no assertions (an answer you copied

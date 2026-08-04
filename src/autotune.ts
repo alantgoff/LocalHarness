@@ -2,6 +2,7 @@ import { computeEncumbrance } from "./loadout.js";
 import { gradeCase, judgeFromEnv, type JudgeConfig } from "./grade.js";
 import { executeRun } from "./runner.js";
 import { cases as caseStore, runs as runStore } from "./store.js";
+import { discrimination, REMEMBERED as PASS_MARK } from "./suite.js";
 import { REGISTRY } from "./tools.js";
 import type { EvalCase, Loadout } from "./types.js";
 
@@ -21,9 +22,6 @@ import type { EvalCase, Loadout } from "./types.js";
  *      nobody can check. "It never used 'Search my files' on any of these
  *      tasks, and dropping it freed 2% of its room" is one they can.
  */
-
-/** A score at or above this counts as "remembered" — matches the UI. */
-const REMEMBERED = 0.8;
 
 /** Below this, a change isn't worth a person's attention. */
 const MIN_DELTA = 0.04;
@@ -93,7 +91,10 @@ async function scoreConfig(
   judge: JudgeConfig | undefined,
   cwd: string | undefined,
 ): Promise<Scored> {
+  // Weighted by how much each case actually separates one model from another.
+  // A lesson everything passes should not outvote the one that decides.
   let total = 0;
+  let weightSum = 0;
   let remembered = 0;
   const speeds: number[] = [];
   const used = new Set<string>();
@@ -110,13 +111,15 @@ async function scoreConfig(
       run.error && !run.output
         ? { score: 0 }
         : await gradeCase(c, run.output, judge, { preferDeterministic: true });
-    total += graded.score;
-    if (graded.score >= REMEMBERED) remembered++;
+    const weight = discrimination(c);
+    total += graded.score * weight;
+    weightSum += weight;
+    if (graded.score >= PASS_MARK) remembered++;
   }
 
   speeds.sort((a, b) => a - b);
   return {
-    mean: evalCases.length ? total / evalCases.length : 0,
+    mean: weightSum > 0 ? total / weightSum : 0,
     remembered,
     total: evalCases.length,
     tokensPerSec: speeds.length ? (speeds[Math.floor(speeds.length / 2)] ?? 0) : 0,

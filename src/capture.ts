@@ -3,7 +3,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { assertionsFromAccept, assertionsFromEdit, assertionsFromReject } from "./assertions.js";
+import { mineFromAccept, mineFromEdit, mineFromReject, toAssertions } from "./mine.js";
+import { findConflicts } from "./suite.js";
 import { cases, newId, verdicts } from "./store.js";
 import type { EvalCase, Run, Verdict, VerdictKind } from "./types.js";
 
@@ -114,7 +115,7 @@ export function promoteToCase(run: Run, verdict: Verdict, tags: string[] = []): 
   switch (verdict.kind) {
     case "edit":
       reference = verdict.correctedOutput ?? "";
-      assertions = assertionsFromEdit(run.output, reference);
+      assertions = toAssertions(mineFromEdit(run.output, reference));
       antiReference = run.output;
       break;
     case "accept":
@@ -124,11 +125,11 @@ export function promoteToCase(run: Run, verdict: Verdict, tags: string[] = []): 
       // required, and mining hard "always say" rules out of it would bake in
       // wording nobody chose — including whatever was wrong with it. The
       // example is still kept, so the judge can compare against it.
-      assertions = verdict.source === "implicit" ? [] : assertionsFromAccept(run.output);
+      assertions = verdict.source === "implicit" ? [] : toAssertions(mineFromAccept(run.output));
       break;
     case "reject":
       reference = "";
-      assertions = assertionsFromReject(run.output);
+      assertions = toAssertions(mineFromReject(run.output));
       antiReference = run.output;
       break;
   }
@@ -154,6 +155,20 @@ export function promoteToCase(run: Run, verdict: Verdict, tags: string[] = []): 
     ...(antiReference ? { antiReference } : {}),
     tags,
   };
+
+  // A lesson that contradicts an earlier one guarantees that one of them fails
+  // forever, dragging every score down for a reason no number explains. Say so
+  // at the moment it happens, while the user still remembers both.
+  const conflicts = findConflicts(evalCase, cases.list());
+  if (conflicts.length) {
+    evalCase.conflictsWith = [...new Set(conflicts.map((c) => c.otherId))];
+    for (const id of evalCase.conflictsWith) {
+      const other = cases.get(id);
+      if (!other) continue;
+      other.conflictsWith = [...new Set([...(other.conflictsWith ?? []), evalCase.id])];
+      cases.save(other);
+    }
+  }
 
   cases.save(evalCase);
   return evalCase;

@@ -33,9 +33,17 @@ export function gradeAssertions(evalCase: EvalCase, output: string): GraderResul
   let earned = 0;
   let possible = 0;
   const failures: string[] = [];
+  const softMisses: string[] = [];
+
+  // Hard rules decide the score. Soft ones — a phrasing the user preferred —
+  // are reported but never gate, because a hundred wordings are equally
+  // correct and failing all but one measures vocabulary, not quality.
+  const hard = evalCase.assertions.filter((a) => !a.soft);
+  const gating = hard.length ? hard : evalCase.assertions;
 
   for (const a of evalCase.assertions) {
-    possible += a.weight;
+    const counts = gating.includes(a);
+    if (counts) possible += a.weight;
     let pass: boolean;
 
     switch (a.kind) {
@@ -51,14 +59,19 @@ export function gradeAssertions(evalCase: EvalCase, output: string): GraderResul
         } catch {
           // A malformed regex is the case's bug, not the model's. Do not
           // penalise the model for it.
-          possible -= a.weight;
+          if (counts) possible -= a.weight;
           continue;
         }
         break;
     }
 
-    if (pass) earned += a.weight;
-    else failures.push(`${a.kind}: ${truncate(a.value, 60)}`);
+    if (pass) {
+      if (counts) earned += a.weight;
+    } else if (counts) {
+      failures.push(`${a.kind}: ${truncate(a.value, 60)}`);
+    } else {
+      softMisses.push(truncate(a.value, 40));
+    }
   }
 
   if (possible === 0) {
@@ -66,13 +79,14 @@ export function gradeAssertions(evalCase: EvalCase, output: string): GraderResul
   }
 
   const score = earned / possible;
+  const soft = softMisses.length ? ` (worded differently: ${softMisses.slice(0, 2).join("; ")})` : "";
   return {
     grader: "assertions",
     score,
     detail:
       failures.length === 0
-        ? `all ${evalCase.assertions.length} passed`
-        : `${failures.length} failed — ${failures.slice(0, 3).join("; ")}`,
+        ? `all ${gating.length} that matter passed${soft}`
+        : `${failures.length} failed — ${failures.slice(0, 3).join("; ")}${soft}`,
   };
 }
 

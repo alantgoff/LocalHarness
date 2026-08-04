@@ -449,6 +449,28 @@ body.no-model .view[data-view="assistant"] .lede p::after {
 .rule-never { border-left-color: var(--clay); }
 
 .rule-kind { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+
+/* A preferred phrasing is not a requirement, and must not look like one. */
+.rule-soft { border-left-style: dotted; opacity: 0.82; }
+.rule-soft .rule-kind { color: var(--ink-3); font-weight: 500; }
+.rule-tag {
+  margin-left: 8px; padding: 1px 7px; border-radius: 999px;
+  font-family: var(--sans); font-size: 10.5px; font-weight: 600;
+  background: var(--moss-soft); color: var(--moss); vertical-align: 2px;
+}
+
+.case-health {
+  margin: 0; padding: 9px 12px;
+  font-size: 13px; border-radius: var(--r-sm);
+  background: var(--card-2); color: var(--ink-2);
+  border-left: 3px solid var(--edge);
+}
+.health-conflicted, .health-nobody-passes {
+  color: var(--clay);
+  border-left-color: var(--clay);
+  background: color-mix(in srgb, var(--clay) 7%, transparent);
+}
+.health-everyone-passes { border-left-color: var(--ochre); }
 .rule-always .rule-kind { color: var(--moss); }
 .rule-never .rule-kind { color: var(--clay); }
 /* The serif is doing real work: these are the user's own words, written down. */

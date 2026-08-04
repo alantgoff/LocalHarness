@@ -16,7 +16,8 @@
     "artifact": "node scripts/build-artifact.mjs",
     "start": "node dist/desktop.js",
     "package": "node scripts/package.mjs",
-    "security": "node scripts/security.mjs"
+    "security": "node scripts/security.mjs",
+    "eval-quality": "node scripts/eval-quality.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -1,6 +1,7 @@
 import { gradeCase, judgeFromEnv } from "./grade.js";
 import { executeRun } from "./runner.js";
 import { cases as caseStore, loadouts, newId, replays } from "./store.js";
+import { recordTrial } from "./suite.js";
 import type { CaseResult, EvalCase, Loadout, Replay } from "./types.js";
 
 /**
@@ -95,6 +96,11 @@ export async function runReplay(opts: ReplayOptions): Promise<Replay> {
       tokensPerSec: run.stats.tokensPerSec,
       ...(run.error ? { error: run.error } : {}),
     };
+    // Every attempt is evidence about the case itself: one that everything
+    // passes cannot help you choose a model, and one that nothing has ever
+    // passed is more likely a broken rule than a universal failing.
+    caseStore.save(recordTrial(evalCase, opts.model, result.score));
+
     results.push(result);
     opts.onProgress?.(results.length, selected.length, result);
   }
