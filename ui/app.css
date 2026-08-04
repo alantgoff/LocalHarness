@@ -21,13 +21,13 @@
 
   --ink: #1b2420;
   --ink-2: #55625b;
-  --ink-3: #8a958e;
+  --ink-3: #656d68;
 
   --moss: #2f6b4f;
   --moss-2: #245840;
   --moss-soft: rgba(47, 107, 79, 0.10);
 
-  --ochre: #9a6714;
+  --ochre: #865a11;
   --clay: #a03f2c;
 
   --shadow: 0 1px 2px rgba(27, 36, 32, 0.05), 0 10px 28px -16px rgba(27, 36, 32, 0.22);
@@ -49,12 +49,12 @@
     --edge-soft: #232e28;
     --ink: #e0e7e2;
     --ink-2: #9aa79f;
-    --ink-3: #6c7a72;
+    --ink-3: #829289;
     --moss: #6dbd90;
     --moss-2: #8ad0aa;
     --moss-soft: rgba(109, 189, 144, 0.13);
     --ochre: #d7a355;
-    --clay: #e07a63;
+    --clay: #e77e66;
     --shadow: 0 1px 0 rgba(255, 255, 255, 0.02), 0 14px 34px -20px rgba(0, 0, 0, 0.85);
   }
 }
@@ -67,12 +67,12 @@
   --edge-soft: #232e28;
   --ink: #e0e7e2;
   --ink-2: #9aa79f;
-  --ink-3: #6c7a72;
+  --ink-3: #829289;
   --moss: #6dbd90;
   --moss-2: #8ad0aa;
   --moss-soft: rgba(109, 189, 144, 0.13);
   --ochre: #d7a355;
-  --clay: #e07a63;
+  --clay: #e77e66;
   --shadow: 0 1px 0 rgba(255, 255, 255, 0.02), 0 14px 34px -20px rgba(0, 0, 0, 0.85);
 }
 
@@ -84,11 +84,11 @@
   --edge-soft: #e7ebe5;
   --ink: #1b2420;
   --ink-2: #55625b;
-  --ink-3: #8a958e;
+  --ink-3: #656d68;
   --moss: #2f6b4f;
   --moss-2: #245840;
   --moss-soft: rgba(47, 107, 79, 0.10);
-  --ochre: #9a6714;
+  --ochre: #865a11;
   --clay: #a03f2c;
   --shadow: 0 1px 2px rgba(27, 36, 32, 0.05), 0 10px 28px -16px rgba(27, 36, 32, 0.22);
 }
@@ -172,8 +172,10 @@ body.show-nerd .nerd-only { display: revert; }
 }
 .tab[aria-pressed="false"] .pip { background: var(--edge); color: var(--ink-2); }
 
-.nerd { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-3); cursor: pointer; white-space: nowrap; }
-.nerd input { accent-color: var(--moss); }
+/* A wrapped checkbox is only as tappable as its label, so the label carries
+   the 24px target rather than the 13px box inside it. */
+.nerd { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 2px; font-size: 12.5px; color: var(--ink-3); cursor: pointer; white-space: nowrap; }
+.nerd input { accent-color: var(--moss); width: 16px; height: 16px; }
 
 /* ── page ────────────────────────────────────────────────────────────────── */
 
@@ -276,6 +278,16 @@ body.show-nerd .nerd-only { display: revert; }
 
 /* ── nothing to talk to ──────────────────────────────────────────────────── */
 
+/* Until there is a model, the only useful thing on the page is getting one.
+   Everything downstream is inert, and presenting it as configurable is a
+   promise the app cannot keep. */
+body.no-model .needs-model { display: none; }
+/* Only the Assistant page actually hides anything, so only it says so. */
+body.no-model .view[data-view="assistant"] .lede p::after {
+  content: " Once a model is running, the rest of this page appears.";
+  color: var(--ink-3);
+}
+
 /* The first real wall for a newcomer, so it gets a whole card and a plain
    instruction rather than a failed task ten screens later. */
 .missing { border-color: color-mix(in srgb, var(--ochre) 55%, var(--edge)); background: color-mix(in srgb, var(--ochre) 6%, var(--card)); }
@@ -325,10 +337,12 @@ body.show-nerd .nerd-only { display: revert; }
   background: var(--moss); color: var(--card);
 }
 .badge-soft { background: var(--edge); color: var(--ink-2); }
+.badge-warn { background: color-mix(in srgb, var(--clay) 13%, transparent); color: var(--clay); }
 
-.custom { border-top: 1px solid var(--edge-soft); padding-top: 12px; }
-.custom summary { font-size: 13.5px; color: var(--ink-2); cursor: pointer; }
+.custom { border-top: 1px solid var(--edge-soft); padding-top: 8px; }
+.custom summary { font-size: 13.5px; color: var(--ink-2); cursor: pointer; min-height: 28px; display: flex; align-items: center; }
 .custom summary:hover { color: var(--ink); }
+.soon-list { padding-top: 10px; }
 .custom-in { display: flex; gap: 12px; flex-wrap: wrap; padding-top: 12px; }
 
 /* ── abilities ───────────────────────────────────────────────────────────── */
@@ -444,11 +458,12 @@ body.show-nerd .nerd-only { display: revert; }
 .lesson-title { margin: 0; font-family: var(--serif); font-size: 18px; font-weight: 600; }
 .lesson-when { margin-left: auto; font-size: 12.5px; color: var(--ink-3); }
 
-.lesson-edit { background: none; border: 0; padding: 0; font: inherit; font-size: 13px; color: var(--ink-2); cursor: pointer; text-decoration: underline; }
+.lesson-edit { background: none; border: 0; padding: 4px 2px; min-height: 28px; font: inherit; font-size: 13px; color: var(--ink-2); cursor: pointer; text-decoration: underline; }
 .lesson-edit:hover { color: var(--moss); }
 
 .rule-drop {
-  background: none; border: 0; padding: 0 0 0 8px;
+  background: none; border: 0; margin-left: 6px;
+  width: 26px; height: 26px; vertical-align: middle;
   font: inherit; font-size: 17px; line-height: 1;
   color: var(--ink-3); cursor: pointer;
 }
@@ -460,9 +475,9 @@ body.show-nerd .nerd-only { display: revert; }
   padding: 2px 9px; border-radius: 999px;
   background: var(--edge); color: var(--ink-2);
 }
-.tag-fixed { background: color-mix(in srgb, var(--ochre) 22%, transparent); color: var(--ochre); }
+.tag-fixed { background: color-mix(in srgb, var(--ochre) 13%, transparent); color: var(--ochre); }
 .tag-kept { background: var(--moss-soft); color: var(--moss); }
-.tag-wrong { background: color-mix(in srgb, var(--clay) 18%, transparent); color: var(--clay); }
+.tag-wrong { background: color-mix(in srgb, var(--clay) 11%, transparent); color: var(--clay); }
 
 /* ── tuning ──────────────────────────────────────────────────────────────── */
 
@@ -515,8 +530,8 @@ body.show-nerd .nerd-only { display: revert; }
 
 .baseline-note { margin: 0; font-size: 13.5px; color: var(--ink-3); }
 
-.setting { display: flex; gap: 11px; align-items: flex-start; cursor: pointer; padding: 4px 0; }
-.setting input { margin-top: 4px; accent-color: var(--moss); flex: none; width: 16px; height: 16px; }
+.setting { display: flex; gap: 11px; align-items: flex-start; cursor: pointer; padding: 6px 0; min-height: 40px; }
+.setting input { margin-top: 3px; accent-color: var(--moss); flex: none; width: 18px; height: 18px; }
 .setting-text { display: flex; flex-direction: column; gap: 1px; }
 .setting-text b { font-size: 14.5px; font-weight: 500; }
 .setting-text i { font-style: normal; font-size: 13px; color: var(--ink-2); }

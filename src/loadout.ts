@@ -23,7 +23,11 @@ export function createLoadout(init: Partial<Loadout> & { name: string }): Loadou
     createdAt: init.createdAt ?? new Date().toISOString(),
     model: init.model ?? "qwen2.5-coder:7b",
     baseUrl: init.baseUrl ?? DEFAULT_BASE_URL,
-    systemPrompt: init.systemPrompt ?? "You are a helpful assistant.",
+    // A first-run default a person can read and edit, not a developer's stub.
+    systemPrompt:
+      init.systemPrompt ??
+      "Answer in plain language, as briefly as the question allows. " +
+        "If you aren't sure of something, say so rather than guessing.",
     tools: init.tools ?? [],
     memory: init.memory ?? [],
     params: init.params ?? { temperature: 0.2 },

@@ -168,6 +168,18 @@ moments would prove nothing. Build a standalone copy with:
 npm run artifact -- demo.html --standalone
 ```
 
+## Before there's a model
+
+The first thing a new install has to survive is having nothing to talk to. The app probes
+on startup, and if nothing answers it goes into setup mode: a banner above **every** screen
+(not just the one you happened to open), the actions that cannot work disabled with a reason
+rather than a raw error, and everything downstream of choosing a brain hidden — because
+inviting someone to configure abilities and pinned notes for an assistant that cannot answer
+is a promise the app can't keep.
+
+A model that is set but unreachable is badged **set, but not running**, never *using this*.
+An app that misreports its own state is worse than one that reports a problem.
+
 ## What the words mean
 
 Everything on screen is deliberately not the engineering term. The mapping, for anyone
@@ -323,6 +335,11 @@ These are real and worth fixing before this is a product.
   falls back to the answer's most distinctive lines, which over-specifies wording. Fixes
   are the signal worth optimising for. (An *implicit* accept now mines nothing at all.)
 - **One task at a time.** No multi-turn conversations captured yet.
+- **Contrast is checked, the rest of accessibility is not.** Every colour pair in both
+  themes clears WCAG AA (verified by computing the ratios, including composited
+  translucent grounds), touch targets clear 24px, inputs have names and focus is visible.
+  Nobody has driven it with a screen reader, and the live regions a background job ought
+  to announce do not exist.
 - **Three abilities, all read-only.** Deliberately harmless, enough to make the cost real.
   A product needs a real catalogue, and then a real permission model.
 

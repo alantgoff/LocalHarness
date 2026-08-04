@@ -306,12 +306,20 @@ function brainOptions() {
   for (const b of BRAINS) {
     if (!seen.has(b.id)) out.push({ ...b, installed: false });
   }
-  // Never hide the one currently in use, even if the probe missed it.
+
+  // Never hide the one currently in use — but never claim it is installed
+  // either. Badging a missing model "using this" while everything around it
+  // says "not downloaded" is the app telling a flat lie about its own state.
   const current = me()?.model;
   if (current && !out.some((b) => b.id === current)) {
-    out.unshift({ ...brainFor(current), installed: true });
+    out.unshift({ ...brainFor(current), installed: installed.length ? false : undefined });
   }
   return out;
+}
+
+/** True once something is actually serving models we can talk to. */
+function ready() {
+  return !!state.health?.ok && (state.health.models?.length ?? 0) > 0;
 }
 
 async function checkHealth() {
@@ -330,10 +338,22 @@ async function checkHealth() {
 function renderHealth() {
   const h = state.health;
   const card = $("#health-card");
+
+  // Nothing on any screen works without a model, so the whole app goes into
+  // setup mode rather than letting the first action fail with a raw error.
+  const blocked = !!h && !ready();
+  document.body.classList.toggle("no-model", blocked);
+  for (const [id, label] of [["btn-run", "Ask"], ["btn-tune", "Start looking"], ["btn-try", "Try it"]]) {
+    const el = $(`#${id}`);
+    if (el) { el.disabled = blocked; el.title = blocked ? "There's no model to answer yet." : label; }
+  }
+  setText("run-hint", blocked ? "No model is running yet — set one up on the Assistant tab." : "");
+  setText("tune-hint", blocked ? "It needs a working model before it can try anything." : "");
+
   if (!h) { card.hidden = true; return; }
 
   // A working setup does not need a banner about being fine.
-  if (h.ok && h.models.length) { card.hidden = true; return; }
+  if (ready()) { card.hidden = true; return; }
 
   card.hidden = false;
   card.classList.toggle("is-ok", !!h.ok);
@@ -416,6 +436,7 @@ async function boot() {
 
   await checkHealth();
   renderAll();
+  renderHealth();
   renderTuneResults();
   renderSettings();
 }
@@ -532,18 +553,25 @@ function renderAssistant() {
   if (document.activeElement !== $("#f-context")) $("#f-context").value = l.contextWindow;
   if (document.activeElement !== $("#f-system")) $("#f-system").value = l.systemPrompt;
 
-  // abilities
-  $("#ability-list").innerHTML = allAbilities()
-    .map((a) => {
-      const on = l.tools.includes(a.name);
-      return `<li class="ability ${on ? "is-on" : ""} ${a.soon ? "is-soon" : ""}">
-        <span class="ability-name">${esc(a.label)}${a.soon ? '<span class="tagline">not built yet</span>' : ""}</span>
-        <button class="btn ability-btn" data-ability="${esc(a.name)}" ${a.soon ? "disabled" : ""}>${on ? "Remove" : "Give it this"}</button>
-        <span class="ability-note">${esc(a.note)}</span>
-        <span class="ability-cost">Takes up ${share(a.tokens, r.window)}<span class="nerd-only mono"> · ${a.tokens} tok · ${esc(a.name)}</span></span>
-      </li>`;
-    })
-    .join("");
+  // Abilities that work, then — folded away — the ones that don't yet. Half a
+  // list of things you cannot switch on is noise, but hiding them entirely
+  // would overstate what the app can do.
+  const abilities = allAbilities();
+  const abilityHtml = (a) => {
+    const on = l.tools.includes(a.name);
+    return `<li class="ability ${on ? "is-on" : ""} ${a.soon ? "is-soon" : ""}">
+      <span class="ability-name">${esc(a.label)}</span>
+      <button class="btn ability-btn" data-ability="${esc(a.name)}" ${a.soon ? "disabled" : ""}>${on ? "Remove" : "Give it this"}</button>
+      <span class="ability-note">${esc(a.note)}</span>
+      <span class="ability-cost">Takes up ${share(a.tokens, r.window)}<span class="nerd-only mono"> · ${a.tokens} tok · ${esc(a.name)}</span></span>
+    </li>`;
+  };
+
+  const soon = abilities.filter((a) => a.soon);
+  $("#ability-list").innerHTML = abilities.filter((a) => !a.soon).map(abilityHtml).join("");
+  $("#soon-wrap").hidden = soon.length === 0;
+  setText("soon-summary", `${soon.length} more that aren't built yet`);
+  $("#soon-list").innerHTML = soon.map(abilityHtml).join("");
 
   // things it always knows
   $("#note-list").innerHTML = l.memory.length
@@ -561,8 +589,12 @@ function renderAssistant() {
 }
 
 function brainHtml(b, current, action) {
+  // "Using this" on a model nothing can reach is the app lying about its own
+  // state, and it is the first thing a newcomer would see.
   const tag = current
-    ? '<span class="badge">using this</span>'
+    ? ready()
+      ? '<span class="badge">using this</span>'
+      : '<span class="badge badge-warn">set, but not running</span>'
     : b.installed === false
       ? '<span class="badge badge-soft">not downloaded</span>'
       : "";
@@ -1108,12 +1140,14 @@ $("#try-list").addEventListener("click", (e) => {
   if (b) tryBrain(b.dataset.brain);
 });
 
-$("#ability-list").addEventListener("click", (e) => {
-  const name = e.target.dataset?.ability;
-  if (!name) return;
-  const l = me();
-  change({ tools: l.tools.includes(name) ? l.tools.filter((t) => t !== name) : [...l.tools, name] });
-});
+for (const id of ["#ability-list", "#soon-list"]) {
+  $(id).addEventListener("click", (e) => {
+    const name = e.target.dataset?.ability;
+    if (!name) return;
+    const l = me();
+    change({ tools: l.tools.includes(name) ? l.tools.filter((t) => t !== name) : [...l.tools, name] });
+  });
+}
 
 $("#note-list").addEventListener("click", (e) => {
   const path = e.target.dataset?.forget;

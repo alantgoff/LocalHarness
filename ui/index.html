@@ -35,6 +35,17 @@
 
 <main class="page">
 
+  <!-- Nothing below works without a model, so this sits above every screen
+       rather than only on the one a newcomer might not be looking at. -->
+  <div class="card missing" id="health-card" hidden>
+    <h2 class="missing-title" id="health-title">Looking for a model on this computer…</h2>
+    <p class="missing-body" id="health-body"></p>
+    <div class="row">
+      <button class="btn" id="btn-health">Check again</button>
+      <span class="hint" id="health-hint"></span>
+    </div>
+  </div>
+
   <!-- ASSISTANT ------------------------------------------------------------->
   <section class="view" data-view="assistant" hidden>
     <div class="lede">
@@ -42,16 +53,26 @@
       <p>It runs on your own computer. Nothing you tell it leaves the machine, and everything it learns stays yours.</p>
     </div>
 
-    <div class="card missing" id="health-card" hidden>
-      <h2 class="missing-title" id="health-title">Looking for a model on this computer…</h2>
-      <p class="missing-body" id="health-body"></p>
-      <div class="row">
-        <button class="btn" id="btn-health">Check again</button>
-        <span class="hint" id="health-hint"></span>
-      </div>
+    <!-- The brain comes first: everything below is a consequence of it, and on
+         a fresh install it is the only choice that matters. -->
+    <div class="card">
+      <h2 class="card-title">Its brain</h2>
+      <p class="card-sub">The model doing the thinking. Swapping it never loses what your assistant has learned.</p>
+      <ul class="brains" id="brain-list" role="list"></ul>
+      <details class="custom">
+        <summary>Use a brain that isn't listed</summary>
+        <div class="custom-in">
+          <label class="field"><span class="field-label">Name</span>
+            <input class="input mono" id="f-model" spellcheck="false" /></label>
+          <label class="field"><span class="field-label">Where it runs</span>
+            <input class="input mono" id="f-baseurl" spellcheck="false" /></label>
+          <label class="field field-sm"><span class="field-label">How much it can hold</span>
+            <input class="input mono" id="f-context" inputmode="numeric" /></label>
+        </div>
+      </details>
     </div>
 
-    <div class="card room">
+    <div class="card room needs-model">
       <div class="room-head">
         <h2 class="card-title">Room to think</h2>
         <span class="room-verdict" id="room-verdict">—</span>
@@ -70,30 +91,17 @@
       <p class="nerd-only mono" id="room-nerd"></p>
     </div>
 
-    <div class="card">
-      <h2 class="card-title">Its brain</h2>
-      <p class="card-sub">The model doing the thinking. Swapping it never loses what your assistant has learned.</p>
-      <ul class="brains" id="brain-list" role="list"></ul>
-      <details class="custom">
-        <summary>Use a brain that isn't listed</summary>
-        <div class="custom-in">
-          <label class="field"><span class="field-label">Name</span>
-            <input class="input mono" id="f-model" spellcheck="false" /></label>
-          <label class="field"><span class="field-label">Where it runs</span>
-            <input class="input mono" id="f-baseurl" spellcheck="false" /></label>
-          <label class="field field-sm"><span class="field-label">How much it can hold</span>
-            <input class="input mono" id="f-context" inputmode="numeric" /></label>
-        </div>
-      </details>
-    </div>
-
-    <div class="card">
+    <div class="card needs-model">
       <h2 class="card-title">What it can do</h2>
       <p class="card-sub">Each ability costs a little of its room to think, so give it only what it needs.</p>
       <ul class="abilities" id="ability-list" role="list"></ul>
+      <details class="custom" id="soon-wrap">
+        <summary id="soon-summary">Abilities that aren't built yet</summary>
+        <ul class="abilities soon-list" id="soon-list" role="list"></ul>
+      </details>
     </div>
 
-    <div class="card">
+    <div class="card needs-model">
       <h2 class="card-title">Things it should always know</h2>
       <p class="card-sub">Files it reads before every single answer — how you write, what your project is, who your customers are.</p>
       <ul class="notes" id="note-list" role="list"></ul>
@@ -103,7 +111,7 @@
       </form>
     </div>
 
-    <div class="card">
+    <div class="card needs-model">
       <h2 class="card-title">How it should act</h2>
       <p class="card-sub">Plain instructions, in your words. It reads these every time.</p>
       <textarea class="input area" id="f-system" rows="4" placeholder="Write like I do: short sentences, no jargon. If you're not sure, say so instead of guessing."></textarea>
@@ -131,7 +139,7 @@
         <span class="nerd-only mono" id="run-nerd"></span>
       </div>
       <div class="answer" id="answer-text"></div>
-      <textarea class="input area answer-edit" id="answer-edit" rows="9" hidden></textarea>
+      <textarea class="input area answer-edit" id="answer-edit" rows="9" hidden aria-label="Correct the answer"></textarea>
 
       <div class="judge" id="judge-bar">
         <p class="judge-q">Did it get this right?</p>
