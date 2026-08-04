@@ -1,0 +1,22 @@
+{
+  "name": "localharness",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Build harnesses for open-weight models, and grow a personal eval suite out of using them.",
+  "type": "module",
+  "bin": {
+    "lh": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "lh": "node dist/cli.js",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}

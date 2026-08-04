@@ -1,0 +1,150 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createInterface } from "node:readline/promises";
+import { assertionsFromAccept, assertionsFromEdit, assertionsFromReject } from "./assertions.js";
+import { cases, newId, verdicts } from "./store.js";
+import type { EvalCase, Run, Verdict, VerdictKind } from "./types.js";
+
+/**
+ * Turning a run into an eval case.
+ *
+ * The cost of this step is the whole ballgame. If capturing a verdict feels
+ * like authoring a test, nobody does it and there is no eval suite. It has to
+ * be one keystroke on work the user was doing anyway.
+ */
+
+export async function promptVerdict(run: Run): Promise<Verdict> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    for (;;) {
+      const answer = (
+        await rl.question("\nverdict — [a]ccept  [e]dit  [r]eject  [s]kip: ")
+      )
+        .trim()
+        .toLowerCase();
+
+      const kind = { a: "accept", e: "edit", r: "reject", s: "skip" }[answer[0] ?? ""];
+      if (!kind) {
+        process.stdout.write("  Enter a, e, r or s.\n");
+        continue;
+      }
+      if (kind === "skip") throw new SkipCapture();
+
+      if (kind === "edit") {
+        rl.close();
+        const corrected = await captureCorrection(run.output);
+        if (corrected.trim() === run.output.trim()) {
+          // Nothing changed, so it was an accept with extra steps.
+          return { kind: "accept", at: new Date().toISOString() };
+        }
+        return { kind: "edit", correctedOutput: corrected, at: new Date().toISOString() };
+      }
+
+      const note = (await rl.question("note (optional): ")).trim();
+      return {
+        kind: kind as VerdictKind,
+        ...(note ? { note } : {}),
+        at: new Date().toISOString(),
+      };
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+export class SkipCapture extends Error {
+  constructor() {
+    super("capture skipped");
+    this.name = "SkipCapture";
+  }
+}
+
+/**
+ * Open the output in $EDITOR so correcting it is normal text editing. Falls
+ * back to a paste-until-a-lone-dot prompt where no editor is configured.
+ */
+async function captureCorrection(original: string): Promise<string> {
+  const editor = process.env.VISUAL ?? process.env.EDITOR;
+
+  if (editor && process.stdin.isTTY) {
+    const dir = mkdtempSync(join(tmpdir(), "localharness-"));
+    const file = join(dir, "correction.md");
+    writeFileSync(file, original, "utf8");
+    const res = spawnSync(editor, [file], { stdio: "inherit", shell: true });
+    if (res.status === 0) return readFileSync(file, "utf8");
+    process.stdout.write("  Editor exited non-zero; falling back to paste mode.\n");
+  }
+
+  process.stdout.write("\nPaste the corrected output. End with a line containing only '.'\n");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const lines: string[] = [];
+  try {
+    for (;;) {
+      const line = await rl.question("");
+      if (line.trim() === ".") break;
+      lines.push(line);
+    }
+  } finally {
+    rl.close();
+  }
+  return lines.join("\n");
+}
+
+function titleFor(input: string): string {
+  const firstLine = input.trim().split("\n")[0] ?? input.trim();
+  return firstLine.length <= 72 ? firstLine : `${firstLine.slice(0, 69)}...`;
+}
+
+/**
+ * Promote a run plus verdict into a replayable case.
+ *
+ * A rejection is worth keeping too: the reference is empty but the rejected
+ * text becomes a not_contains set, which is how "stop doing this" gets
+ * measured on the next model.
+ */
+export function promoteToCase(run: Run, verdict: Verdict, tags: string[] = []): EvalCase {
+  verdicts.save(run.id, verdict);
+
+  let reference: string;
+  let assertions;
+  let antiReference: string | undefined;
+
+  switch (verdict.kind) {
+    case "edit":
+      reference = verdict.correctedOutput ?? "";
+      assertions = assertionsFromEdit(run.output, reference);
+      antiReference = run.output;
+      break;
+    case "accept":
+      reference = run.output;
+      assertions = assertionsFromAccept(run.output);
+      break;
+    case "reject":
+      reference = "";
+      assertions = assertionsFromReject(run.output);
+      antiReference = run.output;
+      break;
+  }
+
+  // With no reference text there is nothing for a judge to compare against.
+  const graders = reference.trim() ? (["assertions", "judge"] as const) : (["assertions"] as const);
+
+  const evalCase: EvalCase = {
+    id: newId("case"),
+    createdAt: new Date().toISOString(),
+    title: titleFor(run.input),
+    input: run.input,
+    loadoutId: run.loadoutId,
+    reference,
+    origin: { runId: run.id, verdict: verdict.kind, model: run.model },
+    assertions,
+    graders: [...graders],
+    ...(antiReference ? { antiReference } : {}),
+    tags,
+  };
+
+  cases.save(evalCase);
+  return evalCase;
+}
