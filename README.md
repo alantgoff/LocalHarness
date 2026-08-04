@@ -34,6 +34,9 @@ npm run build
 
 # Prove the whole loop offline, no model required.
 npm run smoke
+
+# Open the load sheet.
+npm run ui        # -> http://localhost:4173
 ```
 
 Then against a real endpoint (Ollama shown; LM Studio, llama.cpp, vLLM, OpenRouter,
@@ -54,6 +57,29 @@ node dist/cli.js run "the task you were about to do anyway" --loadout work
 node dist/cli.js replay --model some-new-model
 node dist/cli.js report
 node dist/cli.js compare <replayA> <replayB>
+```
+
+## The load sheet
+
+`npm run ui` serves the real thing on `localhost:4173`, reading and writing the same
+`.localharness/` directory the CLI uses. Four screens, in the order the loop runs:
+**Loadout** (equip), **Run** (do a task, give a verdict), **Suite** (your cases),
+**Trials** (score a new model).
+
+The design is a mass budget, not an RPG inventory — an expedition load sheet, where a
+finite allowance is spent by everything you bring. A gauge is pinned to the right of every
+screen and never leaves: how many tokens are left for the actual task, which part of the
+harness ate the rest, and which model currently leads your standings. Cross 50% and the
+figure turns amber; cross 75% and it goes red, because at that point the harness is
+crowding out the work.
+
+Opened without a server — from a file, or as a shared page — it falls back to worked demo
+data. The fallback is not a mockup: equipping really recomputes the budget and fixing an
+answer really mines assertions from the diff, because a faked version of those two moments
+would prove nothing. Build a standalone copy with:
+
+```bash
+npm run artifact -- demo.html --standalone
 ```
 
 ## The three ideas
@@ -162,6 +188,7 @@ These are real and worth fixing before this is a product.
 
 ## Where this goes next
 
-The CLI is scaffolding. The product is the loop, and the two things it still needs are
-a capture step that costs nothing (an editor or chat plugin, so verdicts come from work
-already happening) and a way to age the suite so it tracks what you do now.
+The loop is the product, and it still needs two things. Capture has to cost nothing —
+the UI gets it to one click, but the real answer is an editor or chat plugin so verdicts
+come from work already happening rather than work brought here. And the suite needs to
+age, so it tracks what you do now instead of what you did in March.

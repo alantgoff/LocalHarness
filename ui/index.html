@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LocalHarness — Loadout</title>
+<link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+
+<div class="shell">
+
+  <nav class="rail" aria-label="Sections">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-text">
+        <b>LocalHarness</b>
+        <i>load sheet</i>
+      </span>
+    </div>
+
+    <ul class="nav" role="list">
+      <li><button class="nav-item" data-view="loadout" aria-pressed="true"><span class="nav-key">01</span>Loadout</button></li>
+      <li><button class="nav-item" data-view="run" aria-pressed="false"><span class="nav-key">02</span>Run</button></li>
+      <li><button class="nav-item" data-view="suite" aria-pressed="false"><span class="nav-key">03</span>Suite<span class="nav-count" data-count="cases">0</span></button></li>
+      <li><button class="nav-item" data-view="trials" aria-pressed="false"><span class="nav-key">04</span>Trials<span class="nav-count" data-count="replays">0</span></button></li>
+    </ul>
+
+    <div class="rail-foot">
+      <div class="conn" id="conn">
+        <span class="conn-dot" aria-hidden="true"></span>
+        <span class="conn-text">connecting</span>
+      </div>
+      <p class="conn-note" id="conn-note"></p>
+    </div>
+  </nav>
+
+  <main class="stage" id="stage">
+
+    <!-- 01 LOADOUT ---------------------------------------------------------->
+    <section class="view" data-view="loadout" hidden>
+      <header class="head">
+        <h1>Loadout</h1>
+        <p>Every slot you fill is spent from the same context the task needs. The gauge is the tradeoff.</p>
+      </header>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Harness</h2>
+          <select class="select" id="loadout-picker" aria-label="Active loadout"></select>
+        </div>
+        <div class="fields">
+          <label class="field">
+            <span class="field-label">Model</span>
+            <input class="input mono" id="f-model" spellcheck="false" />
+          </label>
+          <label class="field">
+            <span class="field-label">Endpoint</span>
+            <input class="input mono" id="f-baseurl" spellcheck="false" />
+          </label>
+          <label class="field field-narrow">
+            <span class="field-label">Context window</span>
+            <input class="input mono" id="f-context" inputmode="numeric" />
+          </label>
+        </div>
+        <label class="field field-wide">
+          <span class="field-label">Standing instructions <em id="cost-system">0 tok</em></span>
+          <textarea class="input area" id="f-system" rows="3" spellcheck="false"></textarea>
+        </label>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Tools</h2>
+          <p class="panel-note">Each schema is sent with every request. That is the price.</p>
+        </div>
+        <ul class="gear" id="gear-list" role="list"></ul>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Pinned notes</h2>
+          <p class="panel-note">Files pasted into every prompt — style guides, glossaries, project context.</p>
+        </div>
+        <ul class="pins" id="pin-list" role="list"></ul>
+        <form class="pin-add" id="pin-form">
+          <input class="input mono" id="pin-input" placeholder="NOTES.md" spellcheck="false" aria-label="File to pin" />
+          <button class="btn" type="submit">Pin</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- 02 RUN -------------------------------------------------------------->
+    <section class="view" data-view="run" hidden>
+      <header class="head">
+        <h1>Run</h1>
+        <p>Do a task you actually had. The verdict you were going to reach anyway becomes the test.</p>
+      </header>
+
+      <div class="panel">
+        <label class="field field-wide">
+          <span class="field-label">Task</span>
+          <textarea class="input area" id="task-input" rows="3" placeholder="Draft a refund policy summary for a customer email."></textarea>
+        </label>
+        <div class="row">
+          <button class="btn btn-primary" id="btn-run">Run task</button>
+          <span class="hint" id="run-hint"></span>
+        </div>
+      </div>
+
+      <div class="panel" id="output-panel" hidden>
+        <div class="panel-head">
+          <h2>Answer</h2>
+          <div class="stat-inline" id="run-stats"></div>
+        </div>
+        <pre class="output" id="run-output"></pre>
+        <textarea class="input area output-edit" id="run-edit" rows="10" hidden spellcheck="false"></textarea>
+
+        <div class="verdict" id="verdict-bar">
+          <p class="verdict-q">Was this good?</p>
+          <div class="verdict-btns">
+            <button class="btn verdict-accept" data-verdict="accept">Good — keep it</button>
+            <button class="btn verdict-edit" data-verdict="edit">Fix it</button>
+            <button class="btn verdict-reject" data-verdict="reject">No good</button>
+          </div>
+        </div>
+
+        <div class="verdict verdict-editing" id="edit-bar" hidden>
+          <p class="verdict-q">Edit the answer into what it should have said. The difference becomes the test.</p>
+          <div class="verdict-btns">
+            <button class="btn btn-primary" id="btn-save-edit">Save correction</button>
+            <button class="btn" id="btn-cancel-edit">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel capture" id="capture-panel" hidden>
+        <div class="panel-head">
+          <h2>Captured</h2>
+          <p class="panel-note" id="capture-note"></p>
+        </div>
+        <ul class="asserts" id="capture-asserts" role="list"></ul>
+      </div>
+    </section>
+
+    <!-- 03 SUITE ------------------------------------------------------------>
+    <section class="view" data-view="suite" hidden>
+      <header class="head">
+        <h1>Suite</h1>
+        <p>Your benchmark. Not portable, not comparable to anyone else's — which is the point.</p>
+      </header>
+      <div id="suite-list"></div>
+    </section>
+
+    <!-- 04 TRIALS ----------------------------------------------------------->
+    <section class="view" data-view="trials" hidden>
+      <header class="head">
+        <h1>Trials</h1>
+        <p>A new model ships. Same harness, same tasks, one variable changed.</p>
+      </header>
+
+      <div class="panel">
+        <div class="fields">
+          <label class="field">
+            <span class="field-label">Model to test</span>
+            <input class="input mono" id="trial-model" placeholder="deepseek-v4-flash" spellcheck="false" />
+          </label>
+          <label class="field">
+            <span class="field-label">Endpoint</span>
+            <input class="input mono" id="trial-baseurl" placeholder="leave blank to reuse the harness" spellcheck="false" />
+          </label>
+        </div>
+        <div class="row">
+          <button class="btn btn-primary" id="btn-trial">Run the suite</button>
+          <span class="hint" id="trial-hint"></span>
+        </div>
+      </div>
+
+      <div id="trial-results"></div>
+    </section>
+  </main>
+
+  <!-- PERSISTENT GAUGE ------------------------------------------------------>
+  <aside class="gauge" aria-label="Context budget">
+    <div class="gauge-top">
+      <span class="micro">Free for the task</span>
+      <div class="gauge-free"><b id="g-free">—</b><span class="gauge-unit">tok</span></div>
+      <span class="micro micro-dim" id="g-of">of — window</span>
+    </div>
+
+    <div class="bar" id="g-bar" role="img" aria-label="Context budget consumed by the harness">
+      <div class="bar-seg seg-system" id="seg-system"></div>
+      <div class="bar-seg seg-tools" id="seg-tools"></div>
+      <div class="bar-seg seg-memory" id="seg-memory"></div>
+      <span class="tick" style="left:25%"></span>
+      <span class="tick" style="left:50%"></span>
+      <span class="tick tick-red" style="left:75%"></span>
+    </div>
+    <p class="bar-read"><b id="g-pct">0%</b> spent before the task starts</p>
+
+    <ul class="legend" role="list">
+      <li><span class="dot dot-system"></span>Instructions<b id="g-system">0</b></li>
+      <li><span class="dot dot-tools"></span>Tools<b id="g-tools">0</b></li>
+      <li><span class="dot dot-memory"></span>Notes<b id="g-memory">0</b></li>
+    </ul>
+
+    <div class="gauge-warn" id="g-warn" hidden></div>
+
+    <section class="standings" id="standings" hidden>
+      <h2 class="micro">Standings</h2>
+      <ul id="standings-list" role="list"></ul>
+    </section>
+
+    <dl class="readout">
+      <div><dt>Model</dt><dd class="mono" id="g-model">—</dd></div>
+      <div><dt>Speed</dt><dd class="mono" id="g-speed">—</dd></div>
+      <div><dt>Cases</dt><dd class="mono" id="g-cases">0</dd></div>
+    </dl>
+  </aside>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

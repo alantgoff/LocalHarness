@@ -10,7 +10,9 @@
   "scripts": {
     "build": "tsc",
     "lh": "node dist/cli.js",
-    "smoke": "node scripts/smoke.mjs"
+    "ui": "node dist/server.js",
+    "smoke": "node scripts/smoke.mjs",
+    "artifact": "node scripts/build-artifact.mjs"
   },
   "engines": {
     "node": ">=20"
