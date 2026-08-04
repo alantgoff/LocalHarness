@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
-import type { EvalCase, Loadout, Replay, Run, Verdict } from "./types.js";
+import { DEFAULT_SETTINGS, type EvalCase, type FindingsRecord, type Loadout, type Replay, type Run, type Settings, type Verdict } from "./types.js";
 
 /**
  * Flat JSON files on disk, one document per record. No database, no daemon.
@@ -16,7 +16,7 @@ export function homeDir(): string {
   return override ? resolve(override) : resolve(process.cwd(), ".localharness");
 }
 
-type Collection = "loadouts" | "runs" | "cases" | "replays" | "verdicts";
+type Collection = "loadouts" | "runs" | "cases" | "replays" | "verdicts" | "findings";
 
 function dirFor(c: Collection): string {
   return join(homeDir(), c);
@@ -24,7 +24,7 @@ function dirFor(c: Collection): string {
 
 export function ensureHome(): string {
   const root = homeDir();
-  for (const c of ["loadouts", "runs", "cases", "replays", "verdicts"] as Collection[]) {
+  for (const c of ["loadouts", "runs", "cases", "replays", "verdicts", "findings"] as Collection[]) {
     mkdirSync(dirFor(c), { recursive: true });
   }
   return root;
@@ -97,4 +97,43 @@ export const replays = {
 export const verdicts = {
   save: (runId: string, v: Verdict) => write("verdicts", runId, v),
   get: (runId: string) => read<Verdict>("verdicts", runId),
+};
+
+function remove(c: Collection, id: string): boolean {
+  const p = pathFor(c, id);
+  if (!existsSync(p)) return false;
+  rmSync(p);
+  return true;
+}
+
+/** Deleting is a first-class operation: you don't own what you can't change. */
+export const cases_delete = (id: string) => remove("cases", id);
+
+export const findings = {
+  save: (f: FindingsRecord) => write("findings", f.id, f),
+  get: (id: string) => read<FindingsRecord>("findings", id),
+  list: () => list<FindingsRecord>("findings"),
+  latest: () => list<FindingsRecord>("findings").at(-1),
+  delete: (id: string) => remove("findings", id),
+};
+
+const SETTINGS_FILE = "settings.json";
+
+export const settings = {
+  get(): Settings {
+    const p = join(homeDir(), SETTINGS_FILE);
+    if (!existsSync(p)) return { ...DEFAULT_SETTINGS };
+    try {
+      return { ...DEFAULT_SETTINGS, ...(JSON.parse(readFileSync(p, "utf8")) as Partial<Settings>) };
+    } catch {
+      // A corrupt settings file must not stop the app from opening.
+      return { ...DEFAULT_SETTINGS };
+    }
+  },
+  save(patch: Partial<Settings>): Settings {
+    const next = { ...this.get(), ...patch };
+    mkdirSync(homeDir(), { recursive: true });
+    writeFileSync(join(homeDir(), SETTINGS_FILE), JSON.stringify(next, null, 2) + "\n", "utf8");
+    return next;
+  },
 };

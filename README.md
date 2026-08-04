@@ -62,7 +62,25 @@ time, keep what helped, then verify the winners still work *stacked together*, b
 changes that each help alone can fight when combined. Exhaustive search costs hundreds of
 model calls to beat that by a little, and this has to finish overnight on a laptop.
 
-A pass runs as a background job — start it, close the window, come back.
+Every pass has a hard ceiling on model calls, and a pass that runs out says how many
+options it never reached. A run that covered half the space and reports nothing reads as
+one that covered all of it.
+
+### It also decides *when*
+
+Searching unattended is only half of autonomous; the other half is noticing it's worth
+doing. `src/schedule.ts` watches for the two moments that earn the electricity:
+
+- enough new lessons have piled up that the last answer is stale
+- a model appeared on this machine that has never been checked
+
+and only ever acts while the app has been sitting untouched, so it never competes for a GPU
+someone is in the middle of using. Results are written to disk flagged unread, so overnight
+work is waiting when you come back rather than lost to a restart.
+
+Looking for improvements by itself is **off** until switched on. Watching for new models is
+on, because noticing is cheap and it's the thing people most want told to them. Both are
+toggles on the *Make it better* screen.
 
 ## Who this is for
 
@@ -201,6 +219,15 @@ No hand-authored golden sets. Say whether an answer was right, wrong, or nearly 
 judgement you were making anyway — and the system keeps it. A fix is the richest of the
 three, because the difference says exactly what was wrong.
 
+Some labels cost nothing at all. Copying an answer is real evidence it was usable, given
+without being asked and without anyone stopping what they were doing. That's stored too —
+but as `source: "implicit"`, shown as *you used it* rather than *you kept it*, and
+deliberately **mined for no rules**. Copying tells you an answer was good enough to paste;
+it does not tell you every phrase in it was required, and turning it into "always say"
+rules would bake in wording nobody chose — including whatever was wrong with it. The
+example is kept for the judge to compare against; hard rules come only from a real
+correction.
+
 ### 3. A fix becomes rules
 
 When you correct an answer, LocalHarness diffs your version against the original. Text you
@@ -274,12 +301,17 @@ These are real and worth fixing before this is a product.
   is not solving it. Someone still has to go install Ollama and pull a model. Bundling a
   runtime, or defaulting to a hosted open-weight endpoint with local as the upgrade, is
   the real answer.
-- **Tuning costs a lot of model calls.** A pass is roughly *candidates × lessons* runs,
-  so about 7 × your lesson count. That's fine overnight on a laptop and expensive on a
-  metered hosted endpoint. There is no spend cap, and there should be.
 - **Tuning is greedy, and greedy has blind spots.** It tries one change at a time and then
   verifies the winners stacked. A pair of changes that only helps *together* — a bigger
   context window plus an extra note, say — will never be found.
+- **The budget is a call count, not a cost.** `maxRunsPerPass` caps model calls, which is
+  the right unit on your own GPU and the wrong one on a metered endpoint where a long
+  answer costs more than a short one. It should be able to cap actual spend.
+- **Rules can be deleted but not rewritten.** You can strike one from the app; changing its
+  wording still means editing JSON.
+- **Nothing ages.** What you taught it in March may not describe your work in September,
+  and nothing retires or reweights an old rule yet. The tuner will happily optimise for a
+  lesson that stopped being true.
 - **The brain catalogue is illustrative.** Friendly names, notes and hardware
   requirements in `ui/app.js` are hand-written presentation, not measured. Anything the
   endpoint serves will run; the descriptions need to be checked before they're shown to
@@ -287,14 +319,9 @@ These are real and worth fixing before this is a product.
 - **Token counts are estimates.** No tokenizer dependency; a heuristic that's
   directionally right within roughly 10-15%. Fine for "this ability takes 2% of its
   room", not fine as a hard remaining-capacity figure. Needs a real per-family tokenizer.
-- **Rules from a "that's right" are noisy.** With no correction to diff, it falls back to
-  the answer's most distinctive lines, which over-specifies wording. Fixes are the signal
-  worth optimising for; kept answers lean on the judge.
-- **Nothing ages.** What you taught it in March may not describe your work in September,
-  and nothing here retires or reweights an old rule yet.
-- **Rules can't be edited from the app.** You can read them, which matters, but pruning a
-  bad one means opening the JSON. A person who can't delete something the assistant
-  "learned" wrongly doesn't really own it.
+- **Rules from a stated "that's right" are still noisy.** With no correction to diff, it
+  falls back to the answer's most distinctive lines, which over-specifies wording. Fixes
+  are the signal worth optimising for. (An *implicit* accept now mines nothing at all.)
 - **One task at a time.** No multi-turn conversations captured yet.
 - **Three abilities, all read-only.** Deliberately harmless, enough to make the cost real.
   A product needs a real catalogue, and then a real permission model.
@@ -312,10 +339,11 @@ or chat plugin, so a verdict comes from work already happening instead of work b
 specially. Passive signals — did they copy the answer, did they immediately ask again —
 are labels nobody has to stop and give.
 
-**Tune on a schedule, not on a button.** The engine already runs unattended. The missing
-half is deciding *when* by itself: overnight, on idle, or when a new model appears — so the
-answer is waiting rather than requested. A notification saying "I found something better
-while you were asleep" is the moment this stops being a tool and starts being a service.
+**Let the suite age.** Nothing retires an old lesson, so the tuner optimises just as hard
+for a rule that stopped being true in March. Confidence should decay, and a lesson that
+keeps getting contradicted should ask whether it still holds.
 
-**Let people curate what it learned.** Editing and retiring rules, from the app, in their
-own words. Owning something means being able to change your mind about it.
+**Tell them without them looking.** It now finds things unprompted and flags them unread,
+but someone still has to open the app to discover that. A real notification — "I found
+something better while you were asleep" — is what makes this a service rather than a tool
+that happens to have a background thread.

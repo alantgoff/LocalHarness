@@ -116,6 +116,12 @@ export interface Verdict {
   correctedOutput?: string;
   note?: string;
   at: string;
+  /**
+   * Whether a person said this, or whether it was inferred from what they did.
+   * Copying an answer is real evidence it was good, but it is weaker than
+   * being told so, and the two should never be presented as the same thing.
+   */
+  source?: "explicit" | "implicit";
 }
 
 export type AssertionKind = "contains" | "not_contains" | "regex";
@@ -139,7 +145,7 @@ export interface EvalCase {
   loadoutId: string;
   /** What good looks like: the accepted output, or the user's correction. */
   reference: string;
-  origin: { runId: string; verdict: VerdictKind; model: string };
+  origin: { runId: string; verdict: VerdictKind; model: string; source?: "explicit" | "implicit" };
   assertions: Assertion[];
   graders: GraderKind[];
   /** Rejections are kept as negative references: do not produce this again. */
@@ -164,6 +170,55 @@ export interface CaseResult {
   ms: number;
   tokensPerSec: number;
   error?: string;
+}
+
+/**
+ * How much autonomy the user has granted.
+ *
+ * All of it is off-by-default except the watching, because software that
+ * spends your battery and your GPU without being asked has to earn that first.
+ */
+export interface Settings {
+  /** Look for improvements without being asked. */
+  autoTune: boolean;
+  /** How many new lessons since the last pass before one is worth running. */
+  tuneAfterLessons: number;
+  /** How long the app must be untouched before it starts work. */
+  idleMinutes: number;
+  /** Notice when a new model appears and check it against the suite. */
+  watchForNewModels: boolean;
+  /** Hard ceiling on model calls per pass, so nothing runs away. */
+  maxRunsPerPass: number;
+  lastTuneAt?: string;
+  lastTuneCaseCount?: number;
+  /** Models seen on the last look, so a genuinely new one is detectable. */
+  knownModels?: string[];
+}
+
+export const DEFAULT_SETTINGS: Settings = {
+  autoTune: false,
+  tuneAfterLessons: 3,
+  idleMinutes: 10,
+  watchForNewModels: true,
+  maxRunsPerPass: 120,
+};
+
+/** A stored tuning pass. Overnight work has to survive a restart. */
+export interface FindingsRecord {
+  id: string;
+  createdAt: string;
+  loadoutId: string;
+  /** Whether a person asked for this pass or the app decided to run it. */
+  trigger: "asked" | "idle" | "new-model";
+  baseline: { mean: number; remembered: number; total: number; tokensPerSec: number };
+  findings: unknown[];
+  combined?: unknown;
+  tried: number;
+  cases: number;
+  /** Candidates skipped because the pass hit its ceiling. Never silent. */
+  skipped?: number;
+  /** Cleared once a person has looked at it. */
+  unseen: boolean;
 }
 
 export interface Replay {

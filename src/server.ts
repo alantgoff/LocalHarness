@@ -2,13 +2,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tune } from "./autotune.js";
 import { promoteToCase } from "./capture.js";
-import { cancelJob, getJob, listJobs, runningJob, startJob } from "./jobs.js";
+import { cancelJob, getJob, listJobs, runningJob } from "./jobs.js";
 import { computeEncumbrance, createLoadout, DEFAULT_BASE_URL } from "./loadout.js";
 import { runReplay } from "./replay.js";
 import { executeRun } from "./runner.js";
-import { cases, ensureHome, loadouts, replays, runs } from "./store.js";
+import { noteActivity, startScheduler, startTunePass } from "./schedule.js";
+import { cases, cases_delete, ensureHome, findings, loadouts, replays, runs, settings } from "./store.js";
 import { REGISTRY } from "./tools.js";
 import { estimateTokens } from "./tokens.js";
 import type { Loadout, Verdict } from "./types.js";
@@ -74,6 +74,8 @@ function snapshot() {
     cases: cases.list(),
     replays: replays.list().map((r) => ({ ...r, results: r.results })),
     jobs: listJobs(),
+    findings: findings.list(),
+    settings: settings.get(),
   };
 }
 
@@ -221,6 +223,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, path: string
       ...(str(body, "correctedOutput") ? { correctedOutput: str(body, "correctedOutput")! } : {}),
       ...(str(body, "note") ? { note: str(body, "note")! } : {}),
       at: new Date().toISOString(),
+      source: str(body, "source") === "implicit" ? "implicit" : "explicit",
     };
     const tags = Array.isArray(body.tags) ? (body.tags as string[]) : [];
     sendJson(res, 200, promoteToCase(run, verdict, tags));
@@ -243,16 +246,65 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, path: string
     }
 
     const models = Array.isArray(body.candidateModels) ? (body.candidateModels as string[]) : [];
-    const job = startJob("tune", (handle) =>
-      tune({
-        loadout,
-        candidateModels: models,
-        ...(typeof body.maxCandidates === "number" ? { maxCandidates: body.maxCandidates } : {}),
-        onProgress: handle.report,
-        signal: handle.signal,
-      }),
-    );
-    sendJson(res, 200, job);
+    sendJson(res, 200, startTunePass(loadout.id, "asked", models));
+    return true;
+  }
+
+  if (path === "/api/settings" && method === "GET") {
+    sendJson(res, 200, settings.get());
+    return true;
+  }
+  if (path === "/api/settings" && method === "PATCH") {
+    sendJson(res, 200, settings.save((await readBody(req)) as Record<string, never>));
+    return true;
+  }
+
+  if (path === "/api/findings" && method === "GET") {
+    sendJson(res, 200, findings.list());
+    return true;
+  }
+
+  const findMatch = path.match(/^\/api\/findings\/([^/]+)$/);
+  if (findMatch && method === "PATCH") {
+    const f = findings.get(findMatch[1]!);
+    if (!f) {
+      sendJson(res, 404, { error: "no such result" });
+      return true;
+    }
+    const body = await readBody(req);
+    if (typeof body.unseen === "boolean") f.unseen = body.unseen;
+    findings.save(f);
+    sendJson(res, 200, f);
+    return true;
+  }
+  if (findMatch && method === "DELETE") {
+    sendJson(res, 200, { deleted: findings.delete(findMatch[1]!) });
+    return true;
+  }
+
+  /**
+   * Curating what it learned.
+   *
+   * Reading your own rules matters, but being able to strike one matters more.
+   * A person who cannot delete something their assistant "learned" wrongly
+   * does not really own it.
+   */
+  const caseMatch = path.match(/^\/api\/cases\/([^/]+)$/);
+  if (caseMatch && method === "PATCH") {
+    const c = cases.get(caseMatch[1]!);
+    if (!c) {
+      sendJson(res, 404, { error: "no such lesson" });
+      return true;
+    }
+    const body = await readBody(req);
+    if (Array.isArray(body.assertions)) c.assertions = body.assertions as typeof c.assertions;
+    if (typeof body.title === "string") c.title = body.title;
+    cases.save(c);
+    sendJson(res, 200, c);
+    return true;
+  }
+  if (caseMatch && method === "DELETE") {
+    sendJson(res, 200, { deleted: cases_delete(caseMatch[1]!) });
     return true;
   }
 
@@ -318,8 +370,16 @@ function serveStatic(res: ServerResponse, path: string): void {
 export function startServer(port: number): Promise<number> {
   ensureHome();
 
+  startScheduler();
+
   const server = createServer((req, res) => {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
+
+    // Polling and health probes are the app talking to itself; counting them
+    // as activity would mean it never considered itself idle.
+    if (path.startsWith("/api/") && !path.startsWith("/api/jobs") && path !== "/api/health") {
+      noteActivity();
+    }
 
     handleApi(req, res, path)
       .then((handled) => {

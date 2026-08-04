@@ -259,6 +259,8 @@ const state = {
   dismissed: new Set(),
   poller: null,
   health: null,
+  settings: { autoTune: false, watchForNewModels: true, idleMinutes: 10, tuneAfterLessons: 3 },
+  editing: null,
 };
 
 const $ = (s) => document.querySelector(s);
@@ -406,8 +408,43 @@ async function boot() {
     Object.assign(state, demoState(), { live: false });
   }
   state.activeId = state.loadouts[0]?.id ?? null;
+
+  // A pass that ran while the app was closed left its answer on disk. Pick it
+  // up, or the unattended work was pointless.
+  const waiting = (state.findings ?? []).at(-1);
+  if (waiting) state.tuneResult = waiting;
+
   await checkHealth();
   renderAll();
+  renderTuneResults();
+  renderSettings();
+}
+
+function renderSettings() {
+  const s = state.settings ?? {};
+  $("#set-autotune").checked = !!s.autoTune;
+  $("#set-watch").checked = !!s.watchForNewModels;
+
+  const bits = [];
+  if (s.autoTune) {
+    bits.push(`It'll start a pass once you've taught it ${s.tuneAfterLessons} new things and left it alone for ${s.idleMinutes} minutes.`);
+  }
+  if (s.lastTuneAt) bits.push(`Last looked ${whenText(s.lastTuneAt)}.`);
+  if (!state.live) bits.push("In this demo nothing runs on a timer.");
+  setText("set-status", bits.join(" "));
+}
+
+async function saveSettings(patch) {
+  state.settings = { ...state.settings, ...patch };
+  renderSettings();
+  if (state.live) {
+    try {
+      state.settings = await api("/api/settings", "PATCH", patch);
+      renderSettings();
+    } catch (e) {
+      setText("tune-hint", e.message);
+    }
+  }
 }
 
 async function change(patch) {
@@ -539,11 +576,15 @@ function brainHtml(b, current, action) {
   </li>`;
 }
 
-function ruleHtml(a, i = 0) {
+function ruleHtml(a, i = 0, editableCaseId = null) {
   const always = a.kind === "contains";
   return `<li class="rule ${always ? "rule-always" : "rule-never"}" style="--i:${i}">
     <span class="rule-kind">${always ? "Always say" : "Never say"}</span>
-    <span class="rule-text">${esc(a.value)}</span>
+    <span class="rule-text">${esc(a.value)}${
+      editableCaseId
+        ? `<button class="rule-drop" data-drop="${esc(editableCaseId)}" data-index="${i}" title="Remove this rule" aria-label="Remove this rule">×</button>`
+        : ""
+    }</span>
   </li>`;
 }
 
@@ -561,23 +602,71 @@ function renderLearned() {
     </div>`;
     return;
   }
-  const tagFor = { edit: ["tag-fixed", "you fixed it"], accept: ["tag-kept", "you kept it"], reject: ["tag-wrong", "you said no"] };
+  const tagFor = {
+    edit: ["tag-fixed", "you fixed it"],
+    accept: ["tag-kept", "you kept it"],
+    reject: ["tag-wrong", "you said no"],
+  };
 
   el.innerHTML = state.cases
     .map((c) => {
-      const [cls, label] = tagFor[c.origin.verdict] ?? ["", c.origin.verdict];
+      // An inferred signal must never be dressed up as something you said.
+      const [cls, label] =
+        c.origin.source === "implicit"
+          ? ["tag-kept", "you used it"]
+          : (tagFor[c.origin.verdict] ?? ["", c.origin.verdict]);
+      const open = state.editing === c.id;
+
       return `<article class="card lesson">
         <div class="lesson-head">
           <h2 class="lesson-title">${esc(c.title)}</h2>
         </div>
         <div class="lesson-head">
           <span class="tagline ${cls}">${label}</span>
+          <button class="lesson-edit" data-edit="${esc(c.id)}">${open ? "Done" : "Change this"}</button>
           <span class="lesson-when">${whenText(c.createdAt)}</span>
         </div>
-        <ul class="rules" role="list">${c.assertions.map((a, i) => ruleHtml(a, i)).join("")}</ul>
+        ${c.assertions.length
+          ? `<ul class="rules" role="list">${c.assertions.map((a, i) => ruleHtml(a, i, open ? c.id : null)).join("")}</ul>`
+          : `<p class="empty">${c.origin.source === "implicit"
+              ? "Kept as an example of a good answer. No hard rules — you copied it rather than telling it what mattered."
+              : "No rules from this one, but the example is kept."}</p>`}
+        ${open ? `<div class="lesson-actions">
+          <button class="btn" data-forget-lesson="${esc(c.id)}">Forget this entirely</button>
+          <span class="hint">Removing a rule stops it being checked from now on.</span>
+        </div>` : ""}
       </article>`;
     })
     .join("");
+}
+
+async function dropRule(caseId, index) {
+  const c = state.cases.find((x) => x.id === caseId);
+  if (!c) return;
+  const assertions = c.assertions.filter((_, i) => i !== index);
+  c.assertions = assertions;
+  if (state.live) {
+    try {
+      await api(`/api/cases/${caseId}`, "PATCH", { assertions });
+    } catch (e) {
+      setText("run-hint", e.message);
+    }
+  }
+  renderLearned();
+}
+
+async function forgetLesson(caseId) {
+  state.cases = state.cases.filter((c) => c.id !== caseId);
+  state.editing = null;
+  if (state.live) {
+    try {
+      await api(`/api/cases/${caseId}`, "DELETE");
+    } catch (e) {
+      setText("run-hint", e.message);
+    }
+  }
+  renderLearned();
+  renderTop();
 }
 
 function renderTryList() {
@@ -628,6 +717,7 @@ async function ask() {
 
 function showAnswer() {
   const r = state.run;
+  $("#btn-copy").textContent = "Copy";
   $("#answer-card").hidden = false;
   $("#answer-text").hidden = false;
   $("#answer-text").textContent = r.output || "(it didn't say anything)";
@@ -646,13 +736,13 @@ function startFix() {
   $("#answer-edit").focus();
 }
 
-async function teach(kind, corrected) {
+async function teach(kind, corrected, source = "explicit") {
   const r = state.run;
   let lesson;
 
   if (state.live) {
     try {
-      lesson = await api("/api/capture", "POST", { runId: r.id, kind, ...(corrected ? { correctedOutput: corrected } : {}) });
+      lesson = await api("/api/capture", "POST", { runId: r.id, kind, source, ...(corrected ? { correctedOutput: corrected } : {}) });
       Object.assign(state, await api("/api/state"));
     } catch (e) {
       setText("run-hint", e.message);
@@ -661,13 +751,15 @@ async function teach(kind, corrected) {
   } else {
     const assertions =
       kind === "edit" ? assertionsFromEdit(r.output, corrected)
-      : kind === "accept" ? assertionsFromAccept(r.output)
+      // Mirrors src/capture.ts: an inferred accept keeps the example but mines
+      // no rules, because copying does not mean every phrase was required.
+      : kind === "accept" ? (source === "implicit" ? [] : assertionsFromAccept(r.output))
       : assertionsFromReject(r.output);
     lesson = {
       id: `case_d${Date.now()}`, createdAt: new Date().toISOString(),
       title: r.input.split("\n")[0].slice(0, 90), input: r.input, loadoutId: me().id,
       reference: kind === "edit" ? corrected : kind === "accept" ? r.output : "",
-      origin: { runId: r.id, verdict: kind, model: r.model },
+      origin: { runId: r.id, verdict: kind, model: r.model, source },
       assertions, graders: kind === "reject" ? ["assertions"] : ["assertions", "judge"], tags: [],
     };
     state.cases.push(lesson);
@@ -677,13 +769,18 @@ async function teach(kind, corrected) {
   $("#taught-card").hidden = false;
   setText(
     "taught-sub",
-    kind === "edit" ? "Your changes turned into these rules."
+    source === "implicit" ? "You copied it, so it's kept as an example of a good answer. It won't turn that into hard rules — for those, tell it what to change."
+    : kind === "edit" ? "Your changes turned into these rules."
     : kind === "accept" ? "Kept as an example of a good answer."
     : "Noted as something it shouldn't say again.",
   );
   $("#taught-rules").innerHTML = lesson.assertions.length
     ? lesson.assertions.map((a, i) => ruleHtml(a, i)).join("")
-    : '<li><p class="empty">Nothing specific enough to turn into a rule this time — but the example is saved.</p></li>';
+    : `<li><p class="empty">${
+        source === "implicit"
+          ? "The answer is saved as an example. Every brain you try gets compared against it."
+          : "Nothing specific enough to turn into a rule this time — but the example is saved."
+      }</p></li>`;
 
   state.run = null;
   $("#task-input").value = "";
@@ -943,12 +1040,21 @@ function renderTuneResults() {
     return;
   }
 
-  el.innerHTML = `<div class="card">
+  const unattended = r.trigger && r.trigger !== "asked";
+  el.innerHTML = `<div class="card ${unattended && r.unseen ? "away" : ""}">
+    ${unattended ? `<span class="away-flag">Found while you were away · ${whenText(r.createdAt)}</span>` : ""}
     <h2 class="card-title">It found ${findings.length} thing${findings.length === 1 ? "" : "s"}</h2>
     <p class="card-sub">Each one was checked against every lesson you've taught it. Nothing has been changed yet.</p>
     <p class="baseline-note">Right now it remembers ${r.baseline.remembered} of ${r.baseline.total}<span class="nerd-only mono"> · mean ${(r.baseline.mean * 100).toFixed(1)}% · ${r.baseline.tokensPerSec.toFixed(1)} tok/s · ${r.tried} setups tried</span></p>
+    ${r.skipped ? `<p class="baseline-note">It stopped ${r.skipped} short of trying everything, to stay inside its budget for this pass.</p>` : ""}
   </div>
   <div class="found">${findings.map(findingHtml).join("")}</div>`;
+
+  // Reading it counts as seeing it.
+  if (unattended && r.unseen && state.live) {
+    r.unseen = false;
+    api(`/api/findings/${r.id}`, "PATCH", { unseen: false }).catch(() => {});
+  }
 }
 
 function findingHtml(f, i) {
@@ -1048,6 +1154,43 @@ $("#btn-save-fix").addEventListener("click", () => {
   else teach("edit", corrected);
 });
 $("#btn-cancel-fix").addEventListener("click", showAnswer);
+$("#btn-ask-again").addEventListener("click", () => {
+  $("#taught-card").hidden = true;
+  $("#task-input").focus();
+});
+
+/**
+ * Copying is the cheapest true signal there is.
+ *
+ * Someone who pastes an answer into an email has told you it was good, without
+ * being asked and without stopping what they were doing. It is weaker evidence
+ * than "yes, that's right", so it is stored as implicit and labelled that way
+ * wherever it shows up.
+ */
+$("#btn-copy").addEventListener("click", async () => {
+  const text = state.run?.output ?? "";
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Clipboard access can be refused; the signal is still real.
+  }
+  $("#btn-copy").textContent = "Copied";
+  teach("accept", undefined, "implicit");
+});
+
+$("#learned-list").addEventListener("click", (e) => {
+  const edit = e.target.dataset?.edit;
+  if (edit) { state.editing = state.editing === edit ? null : edit; renderLearned(); return; }
+
+  const drop = e.target.dataset?.drop;
+  if (drop) { dropRule(drop, Number(e.target.dataset.index)); return; }
+
+  const forget = e.target.dataset?.forgetLesson;
+  if (forget) forgetLesson(forget);
+});
+
+$("#set-autotune").addEventListener("change", (e) => saveSettings({ autoTune: e.target.checked }));
+$("#set-watch").addEventListener("change", (e) => saveSettings({ watchForNewModels: e.target.checked }));
 
 $("#btn-try").addEventListener("click", () => tryBrain($("#try-model").value.trim()));
 

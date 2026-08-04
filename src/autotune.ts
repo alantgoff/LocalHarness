@@ -62,6 +62,10 @@ export interface TuneResult {
   findings: Finding[];
   /** Every candidate tried, so nothing is silently dropped. */
   tried: number;
+  /** Candidates never reached because the pass hit its ceiling. */
+  skipped: number;
+  /** Model calls actually spent. */
+  runsUsed: number;
   cases: number;
   combined?: Finding;
 }
@@ -71,6 +75,12 @@ export interface TuneOptions {
   /** Brains worth trying. The caller knows what is installed; this does not. */
   candidateModels?: string[];
   maxCandidates?: number;
+  /**
+   * Ceiling on model calls for the whole pass. A run is cheap on a local GPU
+   * and not cheap on a metered endpoint, and an optimiser with no budget is a
+   * bill waiting to happen.
+   */
+  maxRuns?: number;
   cwd?: string;
   onProgress?: (done: number, total: number, note: string) => void;
   signal?: { aborted: boolean };
@@ -243,19 +253,35 @@ export async function tune(opts: TuneOptions): Promise<TuneResult> {
   const steps = candidates.length + 1;
   let done = 0;
 
+  // Every configuration costs one run per lesson, so the budget is countable
+  // up front rather than discovered halfway through.
+  const perConfig = evalCases.length;
+  const maxRuns = opts.maxRuns ?? Infinity;
+  let runsUsed = 0;
+  let skipped = 0;
+  const canAfford = () => runsUsed + perConfig <= maxRuns;
+
   const report = (note: string) => opts.onProgress?.(done, steps, note);
 
   report("Checking how your current setup does");
   const base = await scoreConfig(opts.loadout, evalCases, judge, opts.cwd);
+  runsUsed += perConfig;
   done++;
 
   const findings: Finding[] = [];
 
   for (const c of candidates) {
     if (opts.signal?.aborted) break;
+    if (!canAfford()) {
+      // Count what was left rather than quietly stopping — a pass that covered
+      // half the options and says nothing reads as a pass that covered them all.
+      skipped++;
+      continue;
+    }
     report(c.label);
 
     const got = await scoreConfig(apply(opts.loadout, c.patch), evalCases, judge, opts.cwd);
+    runsUsed += perConfig;
     done++;
 
     const delta = got.mean - base.mean;
@@ -280,10 +306,11 @@ export async function tune(opts: TuneOptions): Promise<TuneResult> {
   // confident-but-wrong advice this is supposed to replace.
   let combined: Finding | undefined;
   const stackable = findings.filter((f) => f.delta >= MIN_DELTA);
-  if (stackable.length >= 2 && !opts.signal?.aborted) {
+  if (stackable.length >= 2 && !opts.signal?.aborted && canAfford()) {
     report("Checking whether those changes work together");
     const merged = stackable.reduce((l, f) => apply(l, f.patch), opts.loadout);
     const got = await scoreConfig(merged, evalCases, judge, opts.cwd);
+    runsUsed += perConfig;
     const delta = got.mean - base.mean;
 
     if (delta > (stackable[0]?.delta ?? 0)) {
@@ -306,7 +333,9 @@ export async function tune(opts: TuneOptions): Promise<TuneResult> {
   return {
     baseline: { mean: base.mean, remembered: base.remembered, total: base.total, tokensPerSec: base.tokensPerSec },
     findings,
-    tried: candidates.length,
+    tried: candidates.length - skipped,
+    skipped,
+    runsUsed,
     cases: evalCases.length,
     ...(combined ? { combined } : {}),
   };

@@ -119,7 +119,12 @@ export function promoteToCase(run: Run, verdict: Verdict, tags: string[] = []): 
       break;
     case "accept":
       reference = run.output;
-      assertions = assertionsFromAccept(run.output);
+      // An inferred accept is weaker evidence than a stated one. Copying an
+      // answer says it was usable; it does not say every phrase in it is
+      // required, and mining hard "always say" rules out of it would bake in
+      // wording nobody chose — including whatever was wrong with it. The
+      // example is still kept, so the judge can compare against it.
+      assertions = verdict.source === "implicit" ? [] : assertionsFromAccept(run.output);
       break;
     case "reject":
       reference = "";
@@ -138,7 +143,12 @@ export function promoteToCase(run: Run, verdict: Verdict, tags: string[] = []): 
     input: run.input,
     loadoutId: run.loadoutId,
     reference,
-    origin: { runId: run.id, verdict: verdict.kind, model: run.model },
+    origin: {
+      runId: run.id,
+      verdict: verdict.kind,
+      model: run.model,
+      ...(verdict.source ? { source: verdict.source } : {}),
+    },
     assertions,
     graders: [...graders],
     ...(antiReference ? { antiReference } : {}),

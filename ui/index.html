@@ -136,6 +136,7 @@
       <div class="judge" id="judge-bar">
         <p class="judge-q">Did it get this right?</p>
         <div class="judge-btns">
+          <button class="btn" id="btn-copy">Copy</button>
           <button class="btn j-yes" data-verdict="accept">Yes, that's right</button>
           <button class="btn j-fix" data-verdict="edit">Almost — let me fix it</button>
           <button class="btn j-no" data-verdict="reject">No, that's wrong</button>
@@ -155,7 +156,10 @@
       <h2 class="card-title">It learned</h2>
       <p class="card-sub" id="taught-sub"></p>
       <ul class="rules" id="taught-rules" role="list"></ul>
-      <p class="taught-foot">Every brain you try from now on gets checked against this.</p>
+      <div class="row">
+        <button class="btn btn-go" id="btn-ask-again">Ask it something else</button>
+        <span class="hint">Every brain you try from now on gets checked against this.</span>
+      </div>
     </div>
   </section>
 
@@ -182,6 +186,29 @@
         <button class="btn btn-go" id="btn-tune">Start looking</button>
         <span class="hint" id="tune-hint"></span>
       </div>
+    </div>
+
+    <div class="card">
+      <h2 class="card-title">Let it do this on its own</h2>
+      <p class="card-sub">It'll only ever work while you've left it alone, and it never changes anything without asking you first.</p>
+
+      <label class="setting">
+        <input type="checkbox" id="set-autotune" />
+        <span class="setting-text">
+          <b>Look for improvements by itself</b>
+          <i>After you've taught it a few new things, and only once you've been away for a while.</i>
+        </span>
+      </label>
+
+      <label class="setting">
+        <input type="checkbox" id="set-watch" />
+        <span class="setting-text">
+          <b>Tell me when a new model shows up</b>
+          <i>If you download a new one, it gets checked against everything you've taught — without you asking.</i>
+        </span>
+      </label>
+
+      <p class="setting-foot" id="set-status"></p>
     </div>
 
     <div class="card working" id="tune-working" hidden>

@@ -444,6 +444,17 @@ body.show-nerd .nerd-only { display: revert; }
 .lesson-title { margin: 0; font-family: var(--serif); font-size: 18px; font-weight: 600; }
 .lesson-when { margin-left: auto; font-size: 12.5px; color: var(--ink-3); }
 
+.lesson-edit { background: none; border: 0; padding: 0; font: inherit; font-size: 13px; color: var(--ink-2); cursor: pointer; text-decoration: underline; }
+.lesson-edit:hover { color: var(--moss); }
+
+.rule-drop {
+  background: none; border: 0; padding: 0 0 0 8px;
+  font: inherit; font-size: 17px; line-height: 1;
+  color: var(--ink-3); cursor: pointer;
+}
+.rule-drop:hover { color: var(--clay); }
+.lesson-actions { display: flex; gap: 9px; flex-wrap: wrap; padding-top: 4px; }
+
 .tagline {
   font-size: 11.5px; font-weight: 600;
   padding: 2px 9px; border-radius: 999px;
@@ -503,6 +514,18 @@ body.show-nerd .nerd-only { display: revert; }
 .finding-acts { grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
 
 .baseline-note { margin: 0; font-size: 13.5px; color: var(--ink-3); }
+
+.setting { display: flex; gap: 11px; align-items: flex-start; cursor: pointer; padding: 4px 0; }
+.setting input { margin-top: 4px; accent-color: var(--moss); flex: none; width: 16px; height: 16px; }
+.setting-text { display: flex; flex-direction: column; gap: 1px; }
+.setting-text b { font-size: 14.5px; font-weight: 500; }
+.setting-text i { font-style: normal; font-size: 13px; color: var(--ink-2); }
+.setting-foot { margin: 0; font-size: 12.5px; color: var(--ink-3); }
+
+/* Something found while nobody was looking has to announce itself, or the
+   unattended work may as well not have happened. */
+.away { border-color: var(--moss); border-width: 2px; }
+.away-flag { font-size: 12px; font-weight: 600; color: var(--moss); letter-spacing: 0.04em; text-transform: uppercase; }
 
 /* ── the upgrade moment ──────────────────────────────────────────────────── */
 

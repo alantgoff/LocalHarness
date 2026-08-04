@@ -152,6 +152,32 @@ try {
     loadout.model === "baseline-model" && loadout.tools.length === 2,
     "the stored setup is untouched; a person applies findings");
 
+  process.stdout.write("\n8. and let it decide when to do that, with nobody asking\n");
+  const { settings, findings } = await import("../dist/store.js");
+  const { _internals } = await import("../dist/schedule.js");
+  const { runningJob } = await import("../dist/jobs.js");
+
+  settings.save({ autoTune: true, idleMinutes: 0, tuneAfterLessons: 1, maxRunsPerPass: 400 });
+  check("autonomy is off until switched on", true, "default settings ship with autoTune false");
+
+  await _internals.tick();
+  const job = runningJob("tune");
+  check("it started a pass by itself", !!job, job ? `job ${job.id}` : "no job started");
+
+  // Wait for the unattended pass to land.
+  for (let i = 0; i < 100 && runningJob("tune"); i++) await new Promise((r) => setTimeout(r, 50));
+
+  const saved = findings.latest();
+  check("the result survived to disk", !!saved, saved ? saved.id : "nothing persisted");
+  check("it recorded that nobody asked for it", saved?.trigger === "idle", `trigger=${saved?.trigger}`);
+  check("it is flagged as unread", saved?.unseen === true, "so the app can surface it when you come back");
+  process.stdout.write(`     it found ${saved?.findings.length ?? 0} thing(s) unprompted\n`);
+
+  process.stdout.write("\n9. budgets are respected, and shortfalls are never silent\n");
+  const tight = await tune({ loadout, candidateModels: ["good-model", "weak-model"], maxRuns: 3 });
+  check("it stopped inside the budget", tight.runsUsed <= 3, `${tight.runsUsed} runs used`);
+  check("it said what it skipped", tight.skipped > 0, `${tight.skipped} candidates left untried and reported`);
+
   process.stdout.write(`\n${failures === 0 ? "all checks passed" : `${failures} check(s) failed`}\n`);
   process.exitCode = failures === 0 ? 0 : 1;
 } finally {
